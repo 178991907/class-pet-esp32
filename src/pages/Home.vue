@@ -1771,6 +1771,15 @@ onMounted(async () => {
           </Transition>
         </div>
         
+        <!-- 取消批量评价 (在 batchMode 时显式展示) -->
+        <button 
+          v-if="batchMode" 
+          @click="cancelBatchMode" 
+          class="px-3 py-1.5 rounded-lg text-sm bg-red-500 hover:bg-red-600 text-white font-bold shadow-md hover:shadow-lg active:scale-95 transition-all flex items-center gap-1"
+        >
+          <span>❌</span> 取消批量评价
+        </button>
+        
         <!-- User Menu -->
         <div class="relative">
           <button @click="showUserMenu = !showUserMenu" class="w-9 h-9 rounded-full bg-white/95 hover:bg-white shadow-md transition-all flex items-center justify-center overflow-hidden">
@@ -1984,18 +1993,27 @@ onMounted(async () => {
       
       <!-- 批量操作栏 -->
       <Transition name="slide-up">
-        <div v-if="batchMode && selectedStudents.size > 0" class="fixed bottom-6 left-1/2 -translate-x-1/2 bg-white/95 backdrop-blur-lg rounded-2xl shadow-2xl p-4 flex gap-4 z-40 border border-gray-100">
+        <div v-if="batchMode" class="fixed bottom-6 left-1/2 -translate-x-1/2 bg-white/95 backdrop-blur-lg rounded-2xl shadow-2xl p-4 flex gap-3 items-center z-40 border border-gray-100 whitespace-nowrap">
+          <span class="text-gray-600 px-2 font-bold text-sm">已选择 <span class="text-purple-500 font-black">{{ selectedStudents.size }}</span> 人</span>
+          <button 
+            @click="cancelBatchMode"
+            class="px-5 py-2.5 border border-gray-200 hover:bg-gray-50 text-gray-600 rounded-xl font-bold text-sm transition-all"
+          >
+            取消
+          </button>
           <button 
             @click="batchAddPoints"
-            class="bg-gradient-to-r from-green-400 to-emerald-500 text-white px-8 py-3 rounded-xl font-bold hover:shadow-lg hover:scale-105 transition-all flex items-center gap-2"
+            :disabled="selectedStudents.size === 0"
+            class="bg-gradient-to-r from-green-400 to-emerald-500 text-white px-6 py-2.5 rounded-xl font-bold hover:shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 text-sm"
           >
-            <span class="text-xl">⬆️</span> 统一加分
+            <span>⬆️</span> 统一加分
           </button>
           <button 
             @click="batchSubPoints"
-            class="bg-gradient-to-r from-red-400 to-pink-500 text-white px-8 py-3 rounded-xl font-bold hover:shadow-lg hover:scale-105 transition-all flex items-center gap-2"
+            :disabled="selectedStudents.size === 0"
+            class="bg-gradient-to-r from-red-400 to-pink-500 text-white px-6 py-2.5 rounded-xl font-bold hover:shadow-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 text-sm"
           >
-            <span class="text-xl">⬇️</span> 统一扣分
+            <span>⬇️</span> 统一扣分
           </button>
         </div>
       </Transition>
