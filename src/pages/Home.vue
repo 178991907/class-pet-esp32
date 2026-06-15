@@ -1016,9 +1016,10 @@ async function loadSystemData() {
   try {
     const musicRes = await musicApi.get('/device/music-sources')
     musicSources.value = musicRes?.data?.sources || []
-  } catch (err) {
+  } catch (err: any) {
     musicSources.value = []
-    console.warn('⚠️ 后端音源列表加载失败（后端可能未启动），音源功能将降级:', err)
+    const details = err.response?.data?.details || err.message || ''
+    console.warn(`⚠️ 后端音源列表加载失败（${details}），音源功能将降级:`, err)
   }
 }
 
@@ -1502,8 +1503,9 @@ async function saveMusicSource() {
     showMusicAddModal.value = false
     musicForm.value = { id: '', name: '', script_code: '', priority: 0 }
     await loadSystemData()
-  } catch (err) {
-    toast.error('保存音源失败，请重试')
+  } catch (err: any) {
+    const details = err.response?.data?.details || err.message || ''
+    toast.error(`保存音源失败: ${details || '请重试'}`)
   }
 }
 

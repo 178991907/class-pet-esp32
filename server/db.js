@@ -68,6 +68,43 @@ export async function initDb() {
       // 忽略已存在字段报错
     }
 
+    // 动态检查并创建 music_sources 表，确保即使在已有数据库上升级也能正常就绪
+    try {
+      await pgPool.query(`
+        CREATE TABLE IF NOT EXISTS music_sources (
+          id VARCHAR(64) PRIMARY KEY,
+          name VARCHAR(128) NOT NULL,
+          script_code TEXT NOT NULL,
+          priority INTEGER DEFAULT 0,
+          is_enabled INTEGER DEFAULT 1,
+          failure_count INTEGER DEFAULT 0,
+          last_failure_at BIGINT,
+          created_at BIGINT NOT NULL
+        )
+      `)
+      console.log("🎵 [PostgreSQL] 已确保 music_sources 表存在")
+    } catch (err) {
+      console.error("❌ [PostgreSQL] 确保 music_sources 表失败:", err.message)
+    }
+
+    // 动态检查并创建 student_task_applications 表
+    try {
+      await pgPool.query(`
+        CREATE TABLE IF NOT EXISTS student_task_applications (
+          id VARCHAR(64) PRIMARY KEY,
+          student_id VARCHAR(64) NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+          task_name VARCHAR(256) NOT NULL,
+          points INTEGER NOT NULL,
+          status VARCHAR(32) DEFAULT 'pending',
+          auto_confirm_at BIGINT,
+          created_at BIGINT NOT NULL
+        )
+      `)
+      console.log("📝 [PostgreSQL] 已确保 student_task_applications 表存在")
+    } catch (err) {
+      console.error("❌ [PostgreSQL] 确保 student_task_applications 表失败:", err.message)
+    }
+
     // 初始化任务及系统配置
     try {
       await runAsync("INSERT INTO settings (key, value) VALUES ('task_confirm_mode', $1) ON CONFLICT (key) DO NOTHING", JSON.stringify('auto'))

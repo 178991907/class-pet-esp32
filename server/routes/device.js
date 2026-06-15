@@ -246,7 +246,7 @@ router.get('/music-sources', async (req, res) => {
     res.json({ sources })
   } catch (error) {
     console.error('获取音源列表失败:', error)
-    res.status(500).json({ error: '获取音源列表失败' })
+    res.status(500).json({ error: '获取音源列表失败', details: error.message })
   }
 })
 
@@ -265,7 +265,7 @@ router.post('/music-sources', async (req, res) => {
     res.status(201).json({ success: true, id: sourceId })
   } catch (error) {
     console.error('新增音源失败:', error)
-    res.status(500).json({ error: '新增音源失败' })
+    res.status(500).json({ error: '新增音源失败', details: error.message })
   }
 })
 
