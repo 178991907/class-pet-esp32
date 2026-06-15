@@ -206,7 +206,7 @@ let isolatedVM = null
 import('isolated-vm')
   .then(mod => { isolatedVM = mod.default || mod })
   .catch(() => {
-    console.warn('⚠️ isolated-vm 模块加载失败，洛雪音乐源将降级为原生 vm 沙箱模式执行。')
+    console.warn('⚠️ isolated-vm 模块加载失败，自定义音源将降级为原生 vm 沙箱模式执行。')
   })
 
 // 兼容的安全沙箱执行器

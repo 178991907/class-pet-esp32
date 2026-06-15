@@ -1173,7 +1173,7 @@ const globalSearchKeyword = ref('童话')
 const globalSearchLoading = ref(false)
 const showLyricModal = ref(false)
 
-const currentLyricText = ref('🎶 洛雪高可用音源已就绪，等待播放')
+const currentLyricText = ref('🎶 高可用音源已就绪，等待播放')
 
 // Mock 播放列表与歌词本
 const mockPlaylist = [
@@ -1280,10 +1280,10 @@ const currentLyrics = computed(() => {
   // 为未预置的歌曲生成通用的、有仪式感的播放状态提示词，避免穿帮
   return [
     { time: 0, text: `🎶 正在播放：${songName}` },
-    { time: 5, text: "✨ 洛雪音源已成功调通音频直链" },
+    { time: 5, text: "✨ 音源已成功调通音频直链" },
     { time: 10, text: "🎧 音乐声响起，享受当下的旋律吧..." },
     { time: 20, text: "🐾 班级宠物园正在后台与您共同聆听" },
-    { time: 35, text: "🌟 洛雪解析引擎高可用链路持续输出中" },
+    { time: 35, text: "🌟 解析引擎高可用链路持续输出中" },
     { time: 60, text: "🎵 旋律流淌中..." }
   ]
 })
@@ -2718,7 +2718,7 @@ onMounted(async () => {
                 class="flex items-center gap-3 px-4 py-3.5 rounded-xl text-left font-bold transition-all"
                 :class="systemActiveTab === 'music' ? 'bg-gradient-to-r from-orange-500 to-pink-500 text-white shadow-md' : 'text-gray-600 hover:bg-gray-100'"
               >
-                <span>🎵</span> 洛雪多源管理
+                <span>🎵</span> 音源管理
               </button>
               <button 
                 v-if="currentRole === 'admin'"
@@ -2852,10 +2852,10 @@ onMounted(async () => {
                 </div>
               </div>
 
-              <!-- TAB 3: 洛雪多源管理 (仅管理员权限可见) -->
+              <!-- TAB 3: 音源管理 (仅管理员权限可见) -->
               <div v-if="systemActiveTab === 'music' && currentRole === 'admin'" class="flex-1 flex flex-col min-h-0">
                 <div class="flex justify-between items-center mb-4 shrink-0">
-                  <h3 class="text-lg font-bold text-gray-800">洛雪音乐自定义搜索源配置</h3>
+                  <h3 class="text-lg font-bold text-gray-800">自定义搜索源配置</h3>
                   <button 
                     @click="openAddMusicModal" 
                     class="bg-gradient-to-r from-orange-400 to-pink-500 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-md hover:shadow-lg transition-all flex items-center gap-1.5"
@@ -2867,7 +2867,7 @@ onMounted(async () => {
                 <div v-if="(musicSources || []).length === 0" class="flex-1 flex flex-col items-center justify-center text-center p-8 bg-gray-50/50 rounded-2xl border border-gray-100">
                   <span class="text-4xl mb-3">🎵</span>
                   <h4 class="text-gray-800 font-bold">尚未配置任何音乐解析源</h4>
-                  <p class="text-sm text-gray-400 mt-1">您可以导入支持洛雪音乐格式的自定义 JS 源以供设备播放</p>
+                  <p class="text-sm text-gray-400 mt-1">您可以导入支持自定义格式的 JS 音源以供设备播放</p>
                 </div>
                 
                 <div v-else class="flex-1 overflow-auto pr-1 flex flex-col gap-4">
@@ -3099,7 +3099,7 @@ onMounted(async () => {
           <input 
             v-model="musicForm.name"
             type="text" 
-            placeholder="音源名称（如: 洛雪主源）"
+            placeholder="音源名称（如: 自定义主源）"
             class="w-full border-2 border-gray-200 rounded-xl px-5 py-3 mb-4 text-base focus:outline-none focus:border-orange-400 transition-colors"
           />
           <input 
