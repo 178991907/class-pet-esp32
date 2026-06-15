@@ -1,0 +1,31 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "package.json",
+      "use": "@vercel/static"
+    },
+    {
+      "src": "server/index.js",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/pet-garden/api/(.*)",
+      "dest": "server/index.js"
+    },
+    {
+      "src": "/assets/(.*)",
+      "dest": "dist/assets/$1"
+    },
+    {
+      "src": "/images/(.*)",
+      "dest": "dist/images/$1"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "dist/index.html"
+    }
+  ]
+}
