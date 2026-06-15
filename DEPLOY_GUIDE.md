@@ -58,14 +58,19 @@
    - **Root Directory** 保持默认的根目录 `./` 即可。
 
 ### 3. 配置环境变量 (关键步)
-在 **Environment Variables** 展开栏中，配置以下 3 项环境变量：
+在 **Environment Variables** 展开栏中，配置您的环境变量：
 
+#### 必填环境变量
 | 变量名 | 值说明 | 示例值 |
 | :--- | :--- | :--- |
 | `DATABASE_URL` | 上一步取得的 Neon PostgreSQL 连接串 | `postgresql://alex:...` |
 | `TOKEN_SECRET` | 教师管理后台登录 Token 的签名私钥 (防伪造) | `请自己随便输入一串复杂的随机字符串` |
-| `DEVICE_SECRET` | 硬件设备与云端防重放 HMAC 通信签名密钥 | `class-pet-device-secret` (需与设备配置一致) |
-| `OPENROUTER_API_KEY` | (可选) OpenRouter 大模型 API Key。不配时自动降级正则解析 | `sk-or-v1-...` |
+
+#### 可选环境变量
+| 变量名 | 值说明 | 默认/示例值 |
+| :--- | :--- | :--- |
+| `DEVICE_SECRET` | (可选) 硬件防伪 HMAC 通信签名密钥。**如果不配置，系统将自动跳过设备接口的签名和时间戳防重放校验，支持未签名请求直接访问，极度方便无硬件时的模拟器调试与 API 测试。**若配置，需与开发板一致。 | `class-pet-device-secret` |
+| `OPENROUTER_API_KEY` | (可选) OpenRouter 大模型 API Key。不配时自动降级正则解析。 | `sk-or-v1-...` |
 
 4. 点击 **Deploy** 开始部署。Vercel 会根据我们预设的 [vercel.json](file:///Users/Terry/Downloads/class-pet-main/vercel.json) 分流静态前端页面和 `/api/...` 后端云函数。
 5. 部署完成后，Vercel 会为您分配一个域名（如 `https://class-pet-garden.vercel.app`）。

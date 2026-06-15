@@ -19,13 +19,13 @@ async function deviceAuthMiddleware(req, res, next) {
     return res.status(401).json({ error: 'Missing X-Device-ID' })
   }
 
-  const isProduction = process.env.NODE_ENV === 'production'
-  const SECRET = process.env.DEVICE_SECRET || 'class-pet-device-secret'
+  const SECRET = process.env.DEVICE_SECRET
 
-  // 在生产环境下强制要求防重放签名校验
-  if (isProduction || signature) {
+  // 仅在显式配置了 DEVICE_SECRET 环境变量时，才强制进行防重放的 HMAC 签名校验
+  // 若未配置该变量，则视为调试/无硬件模式，直接放行未签名的设备请求，方便开发测试
+  if (SECRET) {
     if (!timestamp || !signature) {
-      return res.status(403).json({ error: 'Missing signature or timestamp headers' })
+      return res.status(403).json({ error: 'Missing signature or timestamp headers (DEVICE_SECRET protection is active)' })
     }
 
     // 允许 120 秒的时钟漂移差值，防止重放攻击
@@ -43,8 +43,10 @@ async function deviceAuthMiddleware(req, res, next) {
       return res.status(403).json({ error: 'Signature mismatch' })
     }
   } else {
-    // 非生产模式且未带签名时的开发调试警告
-    console.warn(`⚠️ 调试模式警告: 设备 ${deviceId} 发送了未签名的请求。生产环境部署时将强制拦截。`)
+    // 调试模式下，若收到带有签名的请求，打出友好提示
+    if (signature) {
+      console.warn(`⚠️ 调试提示: 收到设备 ${deviceId} 的签名请求，但后端未配置 DEVICE_SECRET 环境变量，已跳过校验直接放行。`)
+    }
   }
 
   // 挂载设备信息
