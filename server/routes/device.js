@@ -5,6 +5,14 @@ import vm from 'vm'
 import { getAsync, allAsync, runAsync, initDefaultMusicSources } from '../db.js'
 import { calculateLevel } from '../utils/level.js'
 
+// 全局拦截异步未捕获的 Rejection 与 Exception，防止在 Vercel Serverless 环境下由于沙箱 Promise 失败导致 502 崩溃进程
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('⚠️ [系统防崩卫士] 拦截到未捕获的 Promise Rejection:', reason)
+})
+process.on('uncaughtException', (err) => {
+  console.error('⚠️ [系统防崩卫士] 拦截到未捕获的 Exception:', err.message || err)
+})
+
 const router = Router()
 
 // ================= 安全防重放中间件 =================
@@ -255,6 +263,86 @@ async function safeSandboxExecute(code, contextVars = {}) {
   }
 }
 
+// 直接以原生 Node.js 代码执行内置的高可用音源，避开 vm 沙箱执行异步 Promise 的 Unhandled Rejection 陷阱
+async function executeBuiltinSource(sourceId, keyword) {
+  if (sourceId === 'default-source-kuwo') {
+    try {
+      const searchUrl = 'https://search.kuwo.cn/r.s?client=kt&all=' + encodeURIComponent(keyword) + '&pn=0&rn=1&ft=music&newver=1&alac=1&vipver=1&issub=1&format=json'
+      const res = await fetch(searchUrl)
+      const text = await res.text()
+      let rid = ''
+      const ridMatch = text.match(/'MUSICRID':'([^']+)'/) || text.match(/"MUSICRID":"([^"]+)"/)
+      if (ridMatch) {
+        rid = ridMatch[1]
+      } else {
+        const fallbackMatch = text.match(/"rid":(\d+)/) || text.match(/'rid':(\d+)/)
+        if (fallbackMatch) rid = 'MUSIC_' + fallbackMatch[1]
+      }
+      if (!rid) throw new Error('未找到酷我ID')
+      const playUrl = 'https://antiserver.kuwo.cn/anti.s?type=convert_url&rid=' + rid + '&format=mp3&response=url'
+      const playRes = await fetch(playUrl)
+      const audioUrl = await playRes.text()
+      if (audioUrl && audioUrl.startsWith('http')) {
+        return audioUrl
+      }
+      throw new Error('未解析到有效酷我播放直链')
+    } catch (e) {
+      console.error('Builtin Kuwo parse error:', e.message)
+      throw e
+    }
+  }
+
+  if (sourceId === 'default-source-kugou') {
+    try {
+      const searchUrl = 'https://complexsearch.kugou.com/v2/search/song?keyword=' + encodeURIComponent(keyword) + '&page=1&pagesize=1'
+      const res = await fetch(searchUrl, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1' }
+      })
+      const data = await res.json()
+      if (data && data.data && data.data.lists && data.data.lists.length > 0) {
+        const song = data.data.lists[0]
+        const hash = song.FileHash || song.HQFileHash
+        const albumId = song.AlbumID
+        const playUrl = 'https://www.kugou.com/yy/index.php?r=play/getdata&hash=' + hash + '&album_id=' + albumId
+        const playRes = await fetch(playUrl, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
+        })
+        const playData = await playRes.json()
+        if (playData && playData.data && playData.data.play_url) {
+          return playData.data.play_url
+        }
+      }
+      throw new Error('未搜索到该歌曲播放直链')
+    } catch (e) {
+      console.error('Builtin Kugou parse error:', e.message)
+      throw e
+    }
+  }
+
+  if (sourceId === 'default-source-netease') {
+    try {
+      const searchUrl = 'https://music.163.com/api/search/get/web?csrf_token=&type=1&offset=0&limit=5&s=' + encodeURIComponent(keyword)
+      const response = await fetch(searchUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Referer': 'https://music.163.com'
+        }
+      })
+      const data = await response.json()
+      if (data && data.result && data.result.songs && data.result.songs.length > 0) {
+        const songId = data.result.songs[0].id
+        return 'https://music.163.com/song/media/outer/url?id=' + songId + '.mp3'
+      }
+      throw new Error('网易云未检索到该歌曲')
+    } catch (e) {
+      console.error('Builtin Netease parse error:', e.message)
+      throw e
+    }
+  }
+
+  throw new Error('未知内置源')
+}
+
 // ================= 音源管理 CRUD API（Web 管理后台使用） =================
 
 // 获取所有音源列表
@@ -395,7 +483,8 @@ router.get('/music/search', deviceAuthMiddleware, async (req, res) => {
         source_id
       )
       if (sources.length === 0) {
-        return res.status(404).json({ error: '指定的音乐解析源不可用或已被熔断' })
+        // 如果指定的音源不可用，不直接报错，走硬编码兜底
+        console.warn(`⚠️ 指定的音源 [${source_id}] 当前已被熔断或禁用，自动启动兜底尝试...`)
       }
     } else {
       // 2. 硬件设备盲搜：保持向下兼容，获取全部启用且未熔断的音源按优先级降序
@@ -415,9 +504,14 @@ router.get('/music/search', deviceAuthMiddleware, async (req, res) => {
 
     for (const src of sources) {
       try {
-        console.log(`🎵 沙箱执行: 正在尝试音源 [${src.name}] 搜索: "${keyword}"`)
-        // 执行沙箱，注入 keyword 变量，脚本执行最后一行应返回 MP3 播放直链
-        const result = await safeSandboxExecute(src.script_code, { keyword: keyword.trim() })
+        let result = null
+        if (src.id && src.id.startsWith('default-source-')) {
+          console.log(`🎵 原生执行内置源 [${src.name}]: "${keyword}"`)
+          result = await executeBuiltinSource(src.id, keyword.trim())
+        } else {
+          console.log(`🎵 沙箱执行自定义源 [${src.name}] 搜索: "${keyword}"`)
+          result = await safeSandboxExecute(src.script_code, { keyword: keyword.trim() })
+        }
 
         if (result && typeof result === 'string' && result.startsWith('http')) {
           playUrl = result
@@ -456,8 +550,19 @@ router.get('/music/search', deviceAuthMiddleware, async (req, res) => {
       url: playUrl
     })
   } catch (error) {
-    console.error('音乐检索失败:', error)
-    res.status(500).json({ error: '音乐搜索接口异常' })
+    console.error('音乐检索流程异常，尝试进入最外层兜底:', error)
+    try {
+      const fallbackUrl = await fallbackMusicSearch(keyword.trim())
+      if (fallbackUrl) {
+        return res.json({
+          keyword,
+          url: fallbackUrl
+        })
+      }
+    } catch (fallbackErr) {
+      console.error('终极最外层兜底也发生异常:', fallbackErr.message)
+    }
+    res.status(500).json({ error: '音乐搜索接口异常', details: error.message })
   }
 })
 
