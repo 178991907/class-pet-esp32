@@ -1,6 +1,7 @@
 {
   "name": "class-pet-garden",
   "version": "1.0.0",
+  "type": "module",
   "description": "班级积分管理 + 电子宠物养成系统",
   "scripts": {
     "dev": "vite",

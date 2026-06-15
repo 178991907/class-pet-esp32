@@ -22,6 +22,14 @@ const PORT = 3002
 app.use(cors())
 app.use(express.json())
 
+// 兼容 Vercel 部署环境的代理路径：消除 /pet-garden/api 前缀
+app.use((req, res, next) => {
+  if (req.url.startsWith('/pet-garden/api/')) {
+    req.url = req.url.replace('/pet-garden/api/', '/api/')
+  }
+  next()
+})
+
 // 初始化数据库（异步）
 await initDb()
 
