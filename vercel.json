@@ -1,31 +1,13 @@
 {
-  "version": 2,
-  "builds": [
+  "cleanUrls": true,
+  "rewrites": [
     {
-      "src": "package.json",
-      "use": "@vercel/static"
+      "source": "/pet-garden/api/:path*",
+      "destination": "/api/index.js"
     },
     {
-      "src": "server/index.js",
-      "use": "@vercel/node"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/pet-garden/api/(.*)",
-      "dest": "server/index.js"
-    },
-    {
-      "src": "/assets/(.*)",
-      "dest": "assets/$1"
-    },
-    {
-      "src": "/images/(.*)",
-      "dest": "images/$1"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "index.html"
+      "source": "/:path*",
+      "destination": "/"
     }
   ]
 }
