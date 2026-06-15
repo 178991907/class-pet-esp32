@@ -323,6 +323,13 @@ export async function initDb() {
       console.error("❌ 初始化管理员账号失败:", err)
     }
   }
+
+  // 统一自动初始化默认的 3 个高可用内置音源
+  try {
+    await initDefaultMusicSources()
+  } catch (err) {
+    console.error("❌ 初始化默认内置音源失败:", err.message)
+  }
 }
 
 // 异步 API 实现，统一封装 SQLite 和 PostgreSQL 细节
@@ -390,4 +397,116 @@ export async function closeDb() {
       console.log("💾 [SQLite] 数据库已关闭")
     }
   }
+}
+
+// 初始化默认的 3 个内置高可用音源
+export async function initDefaultMusicSources() {
+  const sources = await allAsync('SELECT id FROM music_sources')
+  if (sources.length > 0) {
+    return // 已经有配置好的音源，不再覆盖，保留用户自定义配置
+  }
+
+  console.log("🎵 检测到音源表为空，正在自动置入高可用内置音源...")
+
+  const defaultSources = [
+    {
+      id: 'default-source-kuwo',
+      name: '酷我音乐直链',
+      priority: 30,
+      script_code: `(async () => {
+  try {
+    const searchUrl = 'https://search.kuwo.cn/r.s?client=kt&all=' + encodeURIComponent(keyword) + '&pn=0&rn=1&ft=music&newver=1&alac=1&vipver=1&issub=1&format=json';
+    const res = await fetch(searchUrl);
+    const text = await res.text();
+    let rid = '';
+    const ridMatch = text.match(/'MUSICRID':'([^']+)'/) || text.match(/"MUSICRID":"([^"]+)"/);
+    if (ridMatch) {
+      rid = ridMatch[1];
+    } else {
+      const fallbackMatch = text.match(/"rid":\\\\d+/) || text.match(/'rid':\\\\d+/);
+      if (fallbackMatch) rid = 'MUSIC_' + fallbackMatch[1];
+    }
+    if (!rid) throw new Error('未找到歌曲对应的酷我ID');
+    const playUrl = 'https://antiserver.kuwo.cn/anti.s?type=convert_url&rid=' + rid + '&format=mp3&response=url';
+    const playRes = await fetch(playUrl);
+    const audioUrl = await playRes.text();
+    if (audioUrl && audioUrl.startsWith('http')) {
+      return audioUrl;
+    }
+    throw new Error('未解析到有效酷我播放直链');
+  } catch (e) {
+    console.error('酷我音乐源解析异常:', e.message);
+    return null;
+  }
+})()`
+    },
+    {
+      id: 'default-source-kugou',
+      name: '酷狗音乐官方',
+      priority: 20,
+      script_code: `(async () => {
+  try {
+    const searchUrl = 'https://complexsearch.kugou.com/v2/search/song?keyword=' + encodeURIComponent(keyword) + '&page=1&pagesize=1';
+    const res = await fetch(searchUrl, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1' }
+    });
+    const data = await res.json();
+    if (data && data.data && data.data.lists && data.data.lists.length > 0) {
+      const song = data.data.lists[0];
+      const hash = song.FileHash || song.HQFileHash;
+      const albumId = song.AlbumID;
+      const playUrl = 'https://www.kugou.com/yy/index.php?r=play/getdata&hash=' + hash + '&album_id=' + albumId;
+      const playRes = await fetch(playUrl, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
+      });
+      const playData = await playRes.json();
+      if (playData && playData.data && playData.data.play_url) {
+        return playData.data.play_url;
+      }
+    }
+    throw new Error('未搜索到该歌曲播放直链');
+  } catch (e) {
+    console.error('酷狗音乐源解析异常:', e.message);
+    return null;
+  }
+})()`
+    },
+    {
+      id: 'default-source-netease',
+      name: '网易云音乐外链',
+      priority: 10,
+      script_code: `(async () => {
+  try {
+    const searchUrl = 'https://music.163.com/api/search/get/web?csrf_token=&type=1&offset=0&limit=5&s=' + encodeURIComponent(keyword);
+    const response = await fetch(searchUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://music.163.com'
+      }
+    });
+    const data = await response.json();
+    if (data && data.result && data.result.songs && data.result.songs.length > 0) {
+      const songId = data.result.songs[0].id;
+      return 'https://music.163.com/song/media/outer/url?id=' + songId + '.mp3';
+    }
+    throw new Error('网易云未检索到该歌曲');
+  } catch (e) {
+    console.error('网易云音乐源解析异常:', e.message);
+    return null;
+  }
+})()`
+    }
+  ]
+
+  for (const src of defaultSources) {
+    await runAsync(
+      'INSERT INTO music_sources (id, name, script_code, priority, is_enabled, failure_count, created_at) VALUES (?, ?, ?, ?, 1, 0, ?)',
+      src.id,
+      src.name,
+      src.script_code,
+      src.priority,
+      Date.now()
+    )
+  }
+  console.log("🎵 已自动载入 3 个高可用内置默认音源！")
 }

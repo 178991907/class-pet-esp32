@@ -2,7 +2,7 @@ import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import crypto from 'crypto'
 import vm from 'vm'
-import { getAsync, allAsync, runAsync } from '../db.js'
+import { getAsync, allAsync, runAsync, initDefaultMusicSources } from '../db.js'
 import { calculateLevel } from '../utils/level.js'
 
 const router = Router()
@@ -211,7 +211,10 @@ import('isolated-vm')
 
 // 兼容的安全沙箱执行器
 async function safeSandboxExecute(code, contextVars = {}) {
-  if (isolatedVM) {
+  // 在 Vercel 部署环境或 isolated-vm 模块加载失败时，强制降级使用原生的 vm 模块，以确保高兼容与低开销
+  const useIsolated = isolatedVM && !process.env.VERCEL
+
+  if (useIsolated) {
     const isolate = new isolatedVM.Isolate({ memoryLimit: 32 }) // 32MB 内存上限
     const context = await isolate.createContext()
     const jail = context.global
@@ -227,13 +230,28 @@ async function safeSandboxExecute(code, contextVars = {}) {
     isolate.dispose()
     return result
   } else {
-    // 降级使用原生内置 vm 沙箱
+    // 降级使用原生内置 vm 沙箱，并注入网络请求及处理工具
     const context = vm.createContext({
       console,
+      fetch: typeof fetch !== 'undefined' ? fetch : undefined,
+      URLSearchParams: typeof URLSearchParams !== 'undefined' ? URLSearchParams : undefined,
+      Buffer: typeof Buffer !== 'undefined' ? Buffer : undefined,
+      process: {
+        env: {
+          NODE_ENV: process.env.NODE_ENV
+        }
+      },
       ...contextVars
     })
     const script = new vm.Script(code)
-    return script.runInContext(context, { timeout: 3000 })
+    // 5000ms 执行超时限制（由于涉及异步网络请求，稍微放宽超时阈值）
+    const result = script.runInContext(context, { timeout: 5000 })
+
+    // 如果沙箱内返回的是一个 Promise，我们在外部进行 await 等待其决议
+    if (result && typeof result.then === 'function') {
+      return await result
+    }
+    return result
   }
 }
 
@@ -288,6 +306,20 @@ router.post('/music-sources/:id/reset', async (req, res) => {
   } catch (error) {
     console.error('重置音源失败:', error)
     res.status(500).json({ error: '重置音源失败' })
+  }
+})
+
+// 一键重置并恢复内置默认音源
+router.post('/music-sources/reset-default', async (req, res) => {
+  try {
+    // 1. 删除已经存在的默认音源（防止主键冲突或被修改过的内容遗留）
+    await runAsync("DELETE FROM music_sources WHERE id IN ('default-source-kuwo', 'default-source-kugou', 'default-source-netease')")
+    // 2. 重新初始化注入
+    await initDefaultMusicSources()
+    res.json({ success: true, message: '默认内置音源已成功恢复并更新！' })
+  } catch (error) {
+    console.error('恢复默认音源异常:', error)
+    res.status(500).json({ error: '恢复默认音源失败', details: error.message })
   }
 })
 
