@@ -1993,7 +1993,7 @@ onMounted(async () => {
       
       <!-- 批量操作栏 -->
       <Transition name="slide-up">
-        <div v-if="batchMode" class="fixed bottom-6 left-1/2 -translate-x-1/2 bg-white/95 backdrop-blur-lg rounded-2xl shadow-2xl p-4 flex gap-3 items-center z-40 border border-gray-100 whitespace-nowrap">
+        <div v-if="batchMode" class="fixed bottom-24 left-1/2 -translate-x-1/2 bg-white/95 backdrop-blur-lg rounded-2xl shadow-2xl p-4 flex gap-3 items-center z-40 border border-gray-100 whitespace-nowrap">
           <span class="text-gray-600 px-2 font-bold text-sm">已选择 <span class="text-purple-500 font-black">{{ selectedStudents.size }}</span> 人</span>
           <button 
             @click="cancelBatchMode"
@@ -2020,7 +2020,7 @@ onMounted(async () => {
       
       <!-- 删除学生操作栏 -->
       <Transition name="slide-up">
-        <div v-if="showDeleteStudentMode" class="fixed bottom-6 left-1/2 -translate-x-1/2 bg-white/95 backdrop-blur-lg rounded-2xl shadow-2xl p-4 flex gap-4 z-40 border border-gray-100">
+        <div v-if="showDeleteStudentMode" class="fixed bottom-24 left-1/2 -translate-x-1/2 bg-white/95 backdrop-blur-lg rounded-2xl shadow-2xl p-4 flex gap-4 z-40 border border-gray-100">
           <span class="text-gray-600 py-3 font-medium">已选 <span class="text-red-500 font-bold">{{ deleteStudentList.length }}</span> 人</span>
           <button 
             @click="batchDeleteStudents"
