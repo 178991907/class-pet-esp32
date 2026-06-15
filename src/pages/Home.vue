@@ -1010,8 +1010,9 @@ async function loadSystemData() {
   // 音源列表单独加载（走后端真实数据库），失败不影响其他功能
   try {
     const musicRes = await musicApi.get('/device/music-sources')
-    musicSources.value = musicRes.data.sources
+    musicSources.value = musicRes?.data?.sources || []
   } catch (err) {
+    musicSources.value = []
     console.warn('⚠️ 后端音源列表加载失败（后端可能未启动），音源功能将降级:', err)
   }
 }
@@ -1248,7 +1249,7 @@ const currentSongIndex = ref(0)
 const selectedSourceId = ref<string>('')
 
 const activeMusicSources = computed(() => {
-  const list = musicSources.value.filter(s => s.is_enabled === 1 && s.failure_count < 3)
+  const list = (musicSources.value || []).filter(s => s.is_enabled === 1 && s.failure_count < 3)
   if (list.length > 0) return list
   // Local 模式或无可用源时的 Mock 预置
   return [
@@ -2840,7 +2841,7 @@ onMounted(async () => {
                   </button>
                 </div>
                 
-                <div v-if="musicSources.length === 0" class="flex-1 flex flex-col items-center justify-center text-center p-8 bg-gray-50/50 rounded-2xl border border-gray-100">
+                <div v-if="(musicSources || []).length === 0" class="flex-1 flex flex-col items-center justify-center text-center p-8 bg-gray-50/50 rounded-2xl border border-gray-100">
                   <span class="text-4xl mb-3">🎵</span>
                   <h4 class="text-gray-800 font-bold">尚未配置任何音乐解析源</h4>
                   <p class="text-sm text-gray-400 mt-1">您可以导入支持洛雪音乐格式的自定义 JS 源以供设备播放</p>
@@ -2848,7 +2849,7 @@ onMounted(async () => {
                 
                 <div v-else class="flex-1 overflow-auto pr-1 flex flex-col gap-4">
                   <div 
-                    v-for="source in musicSources" 
+                    v-for="source in (musicSources || [])" 
                     :key="source.id"
                     class="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm hover:shadow-md transition-shadow flex flex-col gap-4"
                   >
@@ -3029,7 +3030,7 @@ onMounted(async () => {
                     </div>
                     <div>
                       <h4 class="text-2xl font-black text-green-800">
-                        {{ musicSources.filter(s => s.is_enabled && s.failure_count < 3).length }} / {{ musicSources.length }}
+                        {{ (musicSources || []).filter(s => s.is_enabled && s.failure_count < 3).length }} / {{ (musicSources || []).length }}
                       </h4>
                       <p class="text-xs text-green-600 mt-1">当前健康可用音源占比正常</p>
                     </div>
