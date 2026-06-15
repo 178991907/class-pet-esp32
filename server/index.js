@@ -2,7 +2,7 @@ import express from 'express'
 import cors from 'cors'
 import { v4 as uuidv4 } from 'uuid'
 
-import { initDb, db } from './db.js'
+import { initDb, getAsync, allAsync, runAsync, closeDb } from './db.js'
 import { calculateLevel } from './utils/level.js'
 
 // 导入路由
@@ -22,39 +22,43 @@ const PORT = 3002
 app.use(cors())
 app.use(express.json())
 
-// 初始化数据库
-initDb()
+// 初始化数据库（异步）
+await initDb()
 
-// 创建默认游客用户
-const guestUser = db.prepare('SELECT id FROM users WHERE username = ?').get('guest')
+// 创建默认游客用户（异步）
+const guestUser = await getAsync('SELECT id FROM users WHERE username = ?', 'guest')
 if (!guestUser) {
   const guestId = uuidv4()
-  db.prepare('INSERT INTO users (id, username, password_hash, is_guest, created_at) VALUES (?, ?, ?, ?, ?)')
-    .run(guestId, 'guest', '', 1, Date.now())
+  await runAsync(
+    'INSERT INTO users (id, username, password_hash, is_guest, created_at) VALUES (?, ?, ?, ?, ?)',
+    guestId, 'guest', '', 1, Date.now()
+  )
   console.log('✅ 创建默认游客用户')
 }
 
-// 迁移现有班级到游客用户
-const classesWithoutUser = db.prepare('SELECT id FROM classes WHERE user_id IS NULL').all()
+// 迁移现有班级到游客用户（异步）
+const classesWithoutUser = await allAsync('SELECT id FROM classes WHERE user_id IS NULL')
 if (classesWithoutUser.length > 0) {
-  const guest = db.prepare('SELECT id FROM users WHERE username = ?').get('guest')
+  const guest = await getAsync('SELECT id FROM users WHERE username = ?', 'guest')
   if (guest) {
-    db.prepare('UPDATE classes SET user_id = ? WHERE user_id IS NULL').run(guest.id)
+    await runAsync('UPDATE classes SET user_id = ? WHERE user_id IS NULL', guest.id)
     console.log(`✅ 迁移 ${classesWithoutUser.length} 个班级到游客用户`)
   }
 }
 
-// 初始化默认评价规则
-const rulesCount = db.prepare('SELECT COUNT(*) as count FROM evaluation_rules').get()
+// 初始化默认评价规则（异步）
+const rulesCount = await getAsync('SELECT COUNT(*) as count FROM evaluation_rules')
 if (rulesCount && rulesCount.count === 0) {
-  initDefaultRules()
+  await initDefaultRules()
 }
 
-// 初始化等级配置
-const levelConfig = db.prepare("SELECT value FROM settings WHERE key = 'levelConfig'").get()
+// 初始化等级配置（异步）
+const levelConfig = await getAsync("SELECT value FROM settings WHERE key = 'levelConfig'")
 if (!levelConfig) {
-  db.prepare("INSERT INTO settings (key, value) VALUES ('levelConfig', ?)")
-    .run(JSON.stringify([40, 60, 80, 100, 120, 140, 160]))
+  await runAsync(
+    "INSERT INTO settings (key, value) VALUES ('levelConfig', ?)",
+    JSON.stringify([40, 60, 80, 100, 120, 140, 160])
+  )
 }
 
 // 注册路由
@@ -73,7 +77,7 @@ app.get('/api/health', (req, res) => {
 })
 
 // 初始化默认评价规则
-function initDefaultRules() {
+async function initDefaultRules() {
   const defaultRules = [
     // 学习类 - 加分
     { name: '作业完成优秀', points: 1, category: '学习' },
@@ -168,10 +172,19 @@ function initDefaultRules() {
     { name: '扣分严重/打架/作弊/严重违纪', points: -8, category: '其他' },
   ]
 
-  const insertRule = db.prepare('INSERT INTO evaluation_rules (id, name, points, category, is_custom, created_at) VALUES (?, ?, ?, ?, 0, ?)')
   const now = Date.now()
   for (const rule of defaultRules) {
-    insertRule.run(uuidv4(), rule.name, rule.points, rule.category, now)
+    const existing = await getAsync('SELECT id FROM evaluation_rules WHERE name = ?', rule.name)
+    if (!existing) {
+      await runAsync(
+        'INSERT INTO evaluation_rules (id, name, points, category, is_custom, created_at) VALUES (?, ?, ?, ?, 0, ?)',
+        uuidv4(),
+        rule.name,
+        rule.points,
+        rule.category,
+        now
+      )
+    }
   }
   console.log(`✅ 初始化 ${defaultRules.length} 条默认评价规则`)
 }
@@ -195,11 +208,11 @@ if (!isVercel) {
     console.log(`📅 ${new Date().toLocaleString()}`)
   })
 
-  const shutdown = () => {
+  const shutdown = async () => {
     console.log('Shutting down gracefully...')
-    server.close(() => {
+    server.close(async () => {
       console.log('Server closed')
-      db.close()
+      await closeDb()
       process.exit(0)
     })
   }

@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS users (
     username VARCHAR(64) UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
     is_guest INTEGER DEFAULT 0,
+    role VARCHAR(64) DEFAULT 'student',
     created_at BIGINT
 );
 
