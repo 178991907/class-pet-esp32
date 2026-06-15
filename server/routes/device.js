@@ -322,6 +322,61 @@ router.post('/music-sources/reset-default', async (req, res) => {
     res.status(500).json({ error: '恢复默认音源失败', details: error.message })
   }
 })
+// 后端硬编码兜底解析函数，在数据库中所有音源均熔断、失效或为空时起作用，保障极致的高可用
+async function fallbackMusicSearch(keyword) {
+  try {
+    console.log(`🎵 触发后端硬编码兜底解析 (酷我源): "${keyword}"`)
+    const searchUrl = 'https://search.kuwo.cn/r.s?client=kt&all=' + encodeURIComponent(keyword) + '&pn=0&rn=1&ft=music&newver=1&alac=1&vipver=1&issub=1&format=json'
+    const res = await fetch(searchUrl)
+    const text = await res.text()
+    let rid = ''
+    const ridMatch = text.match(/'MUSICRID':'([^']+)'/) || text.match(/"MUSICRID":"([^"]+)"/)
+    if (ridMatch) {
+      rid = ridMatch[1]
+    } else {
+      const fallbackMatch = text.match(/"rid":(\d+)/) || text.match(/'rid':(\d+)/)
+      if (fallbackMatch) rid = 'MUSIC_' + fallbackMatch[1]
+    }
+    if (rid) {
+      const playUrl = 'https://antiserver.kuwo.cn/anti.s?type=convert_url&rid=' + rid + '&format=mp3&response=url'
+      const playRes = await fetch(playUrl)
+      const audioUrl = await playRes.text()
+      if (audioUrl && audioUrl.startsWith('http')) {
+        console.log(`✅ 酷我硬编码兜底解析成功: ${audioUrl}`)
+        return audioUrl
+      }
+    }
+  } catch (err) {
+    console.error('⚠️ 酷我硬编码兜底解析失败:', err.message)
+  }
+
+  try {
+    console.log(`🎵 触发后端硬编码兜底解析 (酷狗源): "${keyword}"`)
+    const searchUrl = 'https://complexsearch.kugou.com/v2/search/song?keyword=' + encodeURIComponent(keyword) + '&page=1&pagesize=1'
+    const res = await fetch(searchUrl, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1' }
+    })
+    const data = await res.json()
+    if (data && data.data && data.data.lists && data.data.lists.length > 0) {
+      const song = data.data.lists[0]
+      const hash = song.FileHash || song.HQFileHash
+      const albumId = song.AlbumID
+      const playUrl = 'https://www.kugou.com/yy/index.php?r=play/getdata&hash=' + hash + '&album_id=' + albumId
+      const playRes = await fetch(playUrl, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
+      })
+      const playData = await playRes.json()
+      if (playData && playData.data && playData.data.play_url) {
+        console.log(`✅ 酷狗硬编码兜底解析成功: ${playData.data.play_url}`)
+        return playData.data.play_url
+      }
+    }
+  } catch (err) {
+    console.error('⚠️ 酷狗硬编码兜底解析失败:', err.message)
+  }
+
+  return null
+}
 
 // 通用设备音乐搜索 API (高可用 Failover 降级和熔断)
 router.get('/music/search', deviceAuthMiddleware, async (req, res) => {
@@ -352,7 +407,7 @@ router.get('/music/search', deviceAuthMiddleware, async (req, res) => {
     }
 
     if (sources.length === 0) {
-      return res.status(503).json({ error: '当前无可用音乐解析源' })
+      console.warn("⚠️ 数据库中当前无可用的音源配置或均已熔断，尝试使用硬编码兜底逻辑...")
     }
 
     let playUrl = null
@@ -382,12 +437,19 @@ router.get('/music/search', deviceAuthMiddleware, async (req, res) => {
       }
     }
 
+    // 终极高可用兜底：如果数据库配置的音源全部失败或为空，直接使用后端硬编码原生函数进行解析！
     if (!playUrl) {
-      return res.status(502).json({ error: '所有音乐源解析均已失效或熔断' })
+      playUrl = await fallbackMusicSearch(keyword.trim())
     }
 
-    // 成功解析后重置该源的失败计数
-    await runAsync('UPDATE music_sources SET failure_count = 0, last_failure_at = NULL WHERE id = ?', usedSourceId)
+    if (!playUrl) {
+      return res.status(502).json({ error: '所有音乐源解析及兜底方案均已失效或熔断' })
+    }
+
+    // 成功解析后，重置该源的失败计数（仅当是从数据库中获取到音源时）
+    if (usedSourceId) {
+      await runAsync('UPDATE music_sources SET failure_count = 0, last_failure_at = NULL WHERE id = ?', usedSourceId)
+    }
 
     res.json({
       keyword,

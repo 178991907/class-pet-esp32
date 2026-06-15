@@ -401,12 +401,11 @@ export async function closeDb() {
 
 // 初始化默认的 3 个内置高可用音源
 export async function initDefaultMusicSources() {
-  const sources = await allAsync('SELECT id FROM music_sources')
-  if (sources.length > 0) {
-    return // 已经有配置好的音源，不再覆盖，保留用户自定义配置
-  }
-
-  console.log("🎵 检测到音源表为空，正在自动置入高可用内置音源...")
+  // 检查已存在哪些内置默认音源，按 ID 查询以支持自动补齐
+  const sources = await allAsync(
+    "SELECT id FROM music_sources WHERE id IN ('default-source-kuwo', 'default-source-kugou', 'default-source-netease')"
+  )
+  const existingIds = (sources || []).map(s => s.id)
 
   const defaultSources = [
     {
@@ -498,15 +497,21 @@ export async function initDefaultMusicSources() {
     }
   ]
 
+  let insertCount = 0
   for (const src of defaultSources) {
-    await runAsync(
-      'INSERT INTO music_sources (id, name, script_code, priority, is_enabled, failure_count, created_at) VALUES (?, ?, ?, ?, 1, 0, ?)',
-      src.id,
-      src.name,
-      src.script_code,
-      src.priority,
-      Date.now()
-    )
+    if (!existingIds.includes(src.id)) {
+      await runAsync(
+        'INSERT INTO music_sources (id, name, script_code, priority, is_enabled, failure_count, created_at) VALUES (?, ?, ?, ?, 1, 0, ?)',
+        src.id,
+        src.name,
+        src.script_code,
+        src.priority,
+        Date.now()
+      )
+      insertCount++
+    }
   }
-  console.log("🎵 已自动载入 3 个高可用内置默认音源！")
+  if (insertCount > 0) {
+    console.log(`🎵 数据库已成功自动补齐置入 ${insertCount} 个缺失的高可用内置默认音源！`)
+  }
 }
