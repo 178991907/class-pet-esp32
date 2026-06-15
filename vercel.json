@@ -3,7 +3,7 @@
   "rewrites": [
     {
       "source": "/pet-garden/api/:path*",
-      "destination": "/api/index.js"
+      "destination": "/api/index"
     },
     {
       "source": "/:path*",
