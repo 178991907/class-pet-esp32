@@ -17,15 +17,15 @@
     },
     {
       "src": "/assets/(.*)",
-      "dest": "dist/assets/$1"
+      "dest": "assets/$1"
     },
     {
       "src": "/images/(.*)",
-      "dest": "dist/images/$1"
+      "dest": "images/$1"
     },
     {
       "src": "/(.*)",
-      "dest": "dist/index.html"
+      "dest": "index.html"
     }
   ]
 }
