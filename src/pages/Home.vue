@@ -316,7 +316,7 @@ const filteredStudents = computed(() => {
 const categories = ['学习', '行为', '健康', '其他']
 
 const currentCategoryRules = computed(() => {
-  return rules.value.filter(r => r.category === selectedEvalTab.value)
+  return (rules.value || []).filter(r => r.category === selectedEvalTab.value)
 })
 
 
@@ -389,8 +389,13 @@ async function loadStudents() {
 }
 
 async function loadRules() {
-  const res = await api.get('/rules')
-  rules.value = res.data.rules
+  try {
+    const res = await api.get('/rules')
+    rules.value = res?.data?.rules || []
+  } catch (error) {
+    rules.value = []
+    console.error('加载评价规则失败:', error)
+  }
 }
 
 async function createClass() {
@@ -2443,14 +2448,14 @@ onMounted(async () => {
           <!-- 规则列表 -->
           <div class="space-y-6">
             <template v-for="cat in categories" :key="cat">
-              <div v-if="rules.filter(r => r.category === cat).length > 0">
+              <div v-if="(rules || []).filter(r => r.category === cat).length > 0">
                 <h4 class="font-bold text-gray-700 mb-3 flex items-center gap-2">
                   <span>{{ cat === '学习' ? '📚' : cat === '行为' ? '🎯' : cat === '健康' ? '💪' : '📌' }}</span>
                   {{ cat }}
                 </h4>
                 <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
                   <div 
-                    v-for="rule in rules.filter(r => r.category === cat)" 
+                    v-for="rule in (rules || []).filter(r => r.category === cat)" 
                     :key="rule.id"
                     class="flex items-center justify-between p-4 rounded-xl border-2"
                     :class="rule.points > 0 ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'"
@@ -2565,7 +2570,7 @@ onMounted(async () => {
             <div class="h-[400px] overflow-y-auto pr-1 custom-scrollbar">
               <div class="grid grid-cols-5 gap-2 content-start">
                 <button 
-                  v-for="rule in rules.filter(r => r.category === detailEvalTab)" 
+                  v-for="rule in (rules || []).filter(r => r.category === detailEvalTab)" 
                   :key="rule.id"
                   @click="detailQuickAdd(rule)"
                   class="rounded-xl p-2 text-center transition-all border-2 hover:scale-105 active:scale-95 h-[70px]"
