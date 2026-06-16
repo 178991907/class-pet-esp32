@@ -211,7 +211,7 @@ function getLevelProgress(exp) {
 // ================= 2. 隔离安全沙箱与多音源 Failover =================
 
 // 带有超时保护的安全 fetch 封装，防止在 Serverless 平台由于网络挂起导致云函数被平台强杀
-async function fetchWithTimeout(url, options = {}, timeout = 3000) {
+async function fetchWithTimeout(url, options = {}, timeout = 1500) {
   const controller = new AbortController()
   const id = setTimeout(() => controller.abort(), timeout)
   try {
@@ -229,10 +229,10 @@ async function fetchWithTimeout(url, options = {}, timeout = 3000) {
 
 // 纯原生内置安全沙箱执行器 (防 native addons 编译及加载风险，完美兼容 Vercel)
 async function safeSandboxExecute(code, contextVars = {}) {
-  // 注入带 3 秒超时限制的网络请求及处理工具
+  // 注入带 1.5 秒超时限制的网络请求及处理工具
   const context = vm.createContext({
     console,
-    fetch: (url, opts) => fetchWithTimeout(url, opts, 3000), // 限制沙箱内部网络请求最多 3 秒
+    fetch: (url, opts) => fetchWithTimeout(url, opts, 1500), // 限制沙箱内部网络请求最多 1.5 秒
     URLSearchParams: typeof URLSearchParams !== 'undefined' ? URLSearchParams : undefined,
     Buffer: typeof Buffer !== 'undefined' ? Buffer : undefined,
     process: {
@@ -401,78 +401,95 @@ router.post('/music-sources/reset-default', async (req, res) => {
   }
 })
 // 后端硬编码兜底解析函数，在数据库中所有音源均熔断、失效或为空时起作用，保障极致的高可用
+// 采用 Promise.any 并行竞争模式，只要有任意一个源成功解析即刻返回，大幅缩减由于封锁带来的等待时长
 async function fallbackMusicSearch(keyword) {
-  try {
-    console.log(`🎵 触发后端硬编码兜底解析 (酷我源): "${keyword}"`)
-    const searchUrl = 'https://search.kuwo.cn/r.s?client=kt&all=' + encodeURIComponent(keyword) + '&pn=0&rn=1&ft=music&newver=1&alac=1&vipver=1&issub=1&format=json'
-    const res = await fetchWithTimeout(searchUrl)
-    const text = await res.text()
-    let rid = ''
-    const ridMatch = text.match(/'MUSICRID':'([^']+)'/) || text.match(/"MUSICRID":"([^"]+)"/)
-    if (ridMatch) {
-      rid = ridMatch[1]
-    } else {
-      const fallbackMatch = text.match(/"rid":(\d+)/) || text.match(/'rid':(\d+)/)
-      if (fallbackMatch) rid = 'MUSIC_' + fallbackMatch[1]
-    }
-    if (rid) {
-      const playUrl = 'https://antiserver.kuwo.cn/anti.s?type=convert_url&rid=' + rid + '&format=mp3&response=url'
-      const playRes = await fetchWithTimeout(playUrl)
-      const audioUrl = await playRes.text()
-      if (audioUrl && audioUrl.startsWith('http')) {
-        console.log(`✅ 酷我硬编码兜底解析成功: ${audioUrl}`)
-        return audioUrl
+  const tasks = [
+    // 酷我解析任务
+    (async () => {
+      try {
+        const searchUrl = 'https://search.kuwo.cn/r.s?client=kt&all=' + encodeURIComponent(keyword) + '&pn=0&rn=1&ft=music&newver=1&alac=1&vipver=1&issub=1&format=json'
+        const res = await fetchWithTimeout(searchUrl, {}, 1500)
+        const text = await res.text()
+        let rid = ''
+        const ridMatch = text.match(/'MUSICRID':'([^']+)'/) || text.match(/"MUSICRID":"([^"]+)"/)
+        if (ridMatch) {
+          rid = ridMatch[1]
+        } else {
+          const fallbackMatch = text.match(/"rid":(\d+)/) || text.match(/'rid':(\d+)/)
+          if (fallbackMatch) rid = 'MUSIC_' + fallbackMatch[1]
+        }
+        if (!rid) throw new Error('酷我未搜索到ID')
+        const playUrl = 'https://antiserver.kuwo.cn/anti.s?type=convert_url&rid=' + rid + '&format=mp3&response=url'
+        const playRes = await fetchWithTimeout(playUrl, {}, 1500)
+        const audioUrl = await playRes.text()
+        if (audioUrl && audioUrl.startsWith('http')) {
+          console.log(`✅ 酷我硬编码兜底解析成功: ${audioUrl}`)
+          return audioUrl
+        }
+        throw new Error('酷我直链解析失败')
+      } catch (err) {
+        throw new Error(`酷我失败: ${err.message}`)
       }
-    }
-  } catch (err) {
-    console.error('⚠️ 酷我硬编码兜底解析失败:', err.message)
-  }
+    })(),
+    // 酷狗解析任务
+    (async () => {
+      try {
+        const searchUrl = 'https://complexsearch.kugou.com/v2/search/song?keyword=' + encodeURIComponent(keyword) + '&page=1&pagesize=1'
+        const res = await fetchWithTimeout(searchUrl, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1' }
+        }, 1500)
+        const data = await res.json()
+        if (data && data.data && data.data.lists && data.data.lists.length > 0) {
+          const song = data.data.lists[0]
+          const hash = song.FileHash || song.HQFileHash
+          const albumId = song.AlbumID
+          const playUrl = 'https://www.kugou.com/yy/index.php?r=play/getdata&hash=' + hash + '&album_id=' + albumId
+          const playRes = await fetchWithTimeout(playUrl, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
+          }, 1500)
+          const playData = await playRes.json()
+          if (playData && playData.data && playData.data.play_url) {
+            console.log(`✅ 酷狗硬编码兜底解析成功: ${playData.data.play_url}`)
+            return playData.data.play_url
+          }
+        }
+        throw new Error('酷狗直链解析失败')
+      } catch (err) {
+        throw new Error(`酷狗失败: ${err.message}`)
+      }
+    })(),
+    // 网易云解析任务
+    (async () => {
+      try {
+        const searchUrl = 'https://music.163.com/api/search/get/web?csrf_token=&type=1&offset=0&limit=5&s=' + encodeURIComponent(keyword)
+        const response = await fetchWithTimeout(searchUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://music.163.com'
+          }
+        }, 1500)
+        const data = await response.json()
+        if (data && data.result && data.result.songs && data.result.songs.length > 0) {
+          const songId = data.result.songs[0].id
+          const playUrl = 'https://music.163.com/song/media/outer/url?id=' + songId + '.mp3'
+          console.log(`✅ 网易云外链源硬编码兜底解析成功: ${playUrl}`)
+          return playUrl
+        }
+        throw new Error('网易云未搜索到该歌曲')
+      } catch (err) {
+        throw new Error(`网易云失败: ${err.message}`)
+      }
+    })()
+  ]
 
   try {
-    console.log(`🎵 触发后端硬编码兜底解析 (酷狗源): "${keyword}"`)
-    const searchUrl = 'https://complexsearch.kugou.com/v2/search/song?keyword=' + encodeURIComponent(keyword) + '&page=1&pagesize=1'
-    const res = await fetchWithTimeout(searchUrl, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1' }
-    })
-    const data = await res.json()
-    if (data && data.data && data.data.lists && data.data.lists.length > 0) {
-      const song = data.data.lists[0]
-      const hash = song.FileHash || song.HQFileHash
-      const albumId = song.AlbumID
-      const playUrl = 'https://www.kugou.com/yy/index.php?r=play/getdata&hash=' + hash + '&album_id=' + albumId
-      const playRes = await fetchWithTimeout(playUrl, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
-      })
-      const playData = await playRes.json()
-      if (playData && playData.data && playData.data.play_url) {
-        console.log(`✅ 酷狗硬编码兜底解析成功: ${playData.data.play_url}`)
-        return playData.data.play_url
-      }
-    }
+    // 竞速执行，任何一个成功就直接返回，从而极大降低了串行超时的累加响应时间
+    const playUrl = await Promise.any(tasks)
+    return playUrl
   } catch (err) {
-    console.error('⚠️ 酷狗硬编码兜底解析失败:', err.message)
+    console.error('⚠️ 终极硬编码兜底全部失败:', err.message || err)
+    return null
   }
-
-  try {
-    console.log(`🎵 触发后端硬编码兜底解析 (网易云外链源): "${keyword}"`)
-    const searchUrl = 'https://music.163.com/api/search/get/web?csrf_token=&type=1&offset=0&limit=5&s=' + encodeURIComponent(keyword)
-    const response = await fetchWithTimeout(searchUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': 'https://music.163.com'
-      }
-    })
-    const data = await response.json()
-    if (data && data.result && data.result.songs && data.result.songs.length > 0) {
-      const songId = data.result.songs[0].id
-      console.log(`✅ 网易云外链源硬编码兜底解析成功: SONG_ID=${songId}`)
-      return 'https://music.163.com/song/media/outer/url?id=' + songId + '.mp3'
-    }
-  } catch (err) {
-    console.error('⚠️ 网易云外链源硬编码兜底解析失败:', err.message)
-  }
-
-  return null
 }
 
 // 通用设备音乐搜索 API (高可用 Failover 降级和熔断)
