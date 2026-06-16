@@ -1098,17 +1098,6 @@ async function resetMusicFailure(id: string) {
   }
 }
 
-async function restoreDefaultMusicSources() {
-  try {
-    toast.info('正在恢复内置默认音源，请稍候...')
-    await musicApi.post('/device/music-sources/reset-default')
-    toast.success('内置默认音源恢复成功！')
-    await loadSystemData()
-  } catch (err: any) {
-    const details = err.response?.data?.details || err.message || ''
-    toast.error(`恢复默认音源失败: ${details}`)
-  }
-}
 
 async function handleMusicUpload(event: Event) {
   const files = (event.target as HTMLInputElement).files
@@ -2872,12 +2861,6 @@ onMounted(async () => {
                   <h3 class="text-lg font-bold text-gray-800">自定义搜索源配置</h3>
                   <div class="flex gap-2">
                     <button 
-                      @click="restoreDefaultMusicSources" 
-                      class="border border-orange-200 text-orange-500 hover:bg-orange-50 px-4 py-2 rounded-xl text-sm font-bold shadow-sm transition-all flex items-center gap-1.5"
-                    >
-                      <span>🔄</span> 恢复内置音源
-                    </button>
-                    <button 
                       @click="openAddMusicModal" 
                       class="bg-gradient-to-r from-orange-400 to-pink-500 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-md hover:shadow-lg transition-all flex items-center gap-1.5"
                     >
@@ -2889,13 +2872,7 @@ onMounted(async () => {
                 <div v-if="(musicSources || []).length === 0" class="flex-1 flex flex-col items-center justify-center text-center p-8 bg-gray-50/50 rounded-2xl border border-gray-100">
                   <span class="text-4xl mb-3">🎵</span>
                   <h4 class="text-gray-800 font-bold">尚未配置任何音乐解析源</h4>
-                  <p class="text-sm text-gray-400 mt-1">您可以导入支持自定义格式的 JS 音源，或一键载入内置高可用默认音源</p>
-                  <button 
-                    @click="restoreDefaultMusicSources" 
-                    class="mt-4 bg-gradient-to-r from-orange-400 to-pink-500 text-white px-6 py-2.5 rounded-xl text-sm font-bold shadow-md hover:shadow-lg transition-all flex items-center gap-1.5"
-                  >
-                    <span>🔄</span> 一键载入内置默认音源
-                  </button>
+                  <p class="text-sm text-gray-400 mt-1">您可以导入支持自定义格式的 JS 音源以启用音乐播放。</p>
                 </div>
                 
                 <div v-else class="flex-1 overflow-auto pr-1 flex flex-col gap-4">
