@@ -210,57 +210,47 @@ function getLevelProgress(exp) {
 
 // ================= 2. 隔离安全沙箱与多音源 Failover =================
 
-let isolatedVM = null
-import('isolated-vm')
-  .then(mod => { isolatedVM = mod.default || mod })
-  .catch(() => {
-    console.warn('⚠️ isolated-vm 模块加载失败，自定义音源将降级为原生 vm 沙箱模式执行。')
-  })
-
-// 兼容的安全沙箱执行器
-async function safeSandboxExecute(code, contextVars = {}) {
-  // 在 Vercel 部署环境或 isolated-vm 模块加载失败时，强制降级使用原生的 vm 模块，以确保高兼容与低开销
-  const useIsolated = isolatedVM && !process.env.VERCEL
-
-  if (useIsolated) {
-    const isolate = new isolatedVM.Isolate({ memoryLimit: 32 }) // 32MB 内存上限
-    const context = await isolate.createContext()
-    const jail = context.global
-    await jail.set('global', jail.derefInto())
-
-    for (const [key, val] of Object.entries(contextVars)) {
-      await jail.set(key, val)
-    }
-
-    const script = await isolate.compileScript(code)
-    // 3000ms 执行超时限制
-    const result = await script.run(context, { timeout: 3000 })
-    isolate.dispose()
-    return result
-  } else {
-    // 降级使用原生内置 vm 沙箱，并注入网络请求及处理工具
-    const context = vm.createContext({
-      console,
-      fetch: typeof fetch !== 'undefined' ? fetch : undefined,
-      URLSearchParams: typeof URLSearchParams !== 'undefined' ? URLSearchParams : undefined,
-      Buffer: typeof Buffer !== 'undefined' ? Buffer : undefined,
-      process: {
-        env: {
-          NODE_ENV: process.env.NODE_ENV
-        }
-      },
-      ...contextVars
+// 带有超时保护的安全 fetch 封装，防止在 Serverless 平台由于网络挂起导致云函数被平台强杀
+async function fetchWithTimeout(url, options = {}, timeout = 3000) {
+  const controller = new AbortController()
+  const id = setTimeout(() => controller.abort(), timeout)
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal
     })
-    const script = new vm.Script(code)
-    // 5000ms 执行超时限制（由于涉及异步网络请求，稍微放宽超时阈值）
-    const result = script.runInContext(context, { timeout: 5000 })
-
-    // 如果沙箱内返回的是一个 Promise，我们在外部进行 await 等待其决议
-    if (result && typeof result.then === 'function') {
-      return await result
-    }
-    return result
+    clearTimeout(id)
+    return response
+  } catch (err) {
+    clearTimeout(id)
+    throw err
   }
+}
+
+// 纯原生内置安全沙箱执行器 (防 native addons 编译及加载风险，完美兼容 Vercel)
+async function safeSandboxExecute(code, contextVars = {}) {
+  // 注入带 3 秒超时限制的网络请求及处理工具
+  const context = vm.createContext({
+    console,
+    fetch: (url, opts) => fetchWithTimeout(url, opts, 3000), // 限制沙箱内部网络请求最多 3 秒
+    URLSearchParams: typeof URLSearchParams !== 'undefined' ? URLSearchParams : undefined,
+    Buffer: typeof Buffer !== 'undefined' ? Buffer : undefined,
+    process: {
+      env: {
+        NODE_ENV: process.env.NODE_ENV
+      }
+    },
+    ...contextVars
+  })
+  const script = new vm.Script(code)
+  // 5000ms 执行超时限制
+  const result = script.runInContext(context, { timeout: 5000 })
+
+  // 如果沙箱内返回的是一个 Promise，我们在外部进行 await 等待其决议
+  if (result && typeof result.then === 'function') {
+    return await result
+  }
+  return result
 }
 
 // 直接以原生 Node.js 代码执行内置的高可用音源，避开 vm 沙箱执行异步 Promise 的 Unhandled Rejection 陷阱
@@ -268,7 +258,7 @@ async function executeBuiltinSource(sourceId, keyword) {
   if (sourceId === 'default-source-kuwo') {
     try {
       const searchUrl = 'https://search.kuwo.cn/r.s?client=kt&all=' + encodeURIComponent(keyword) + '&pn=0&rn=1&ft=music&newver=1&alac=1&vipver=1&issub=1&format=json'
-      const res = await fetch(searchUrl)
+      const res = await fetchWithTimeout(searchUrl)
       const text = await res.text()
       let rid = ''
       const ridMatch = text.match(/'MUSICRID':'([^']+)'/) || text.match(/"MUSICRID":"([^"]+)"/)
@@ -280,7 +270,7 @@ async function executeBuiltinSource(sourceId, keyword) {
       }
       if (!rid) throw new Error('未找到酷我ID')
       const playUrl = 'https://antiserver.kuwo.cn/anti.s?type=convert_url&rid=' + rid + '&format=mp3&response=url'
-      const playRes = await fetch(playUrl)
+      const playRes = await fetchWithTimeout(playUrl)
       const audioUrl = await playRes.text()
       if (audioUrl && audioUrl.startsWith('http')) {
         return audioUrl
@@ -295,7 +285,7 @@ async function executeBuiltinSource(sourceId, keyword) {
   if (sourceId === 'default-source-kugou') {
     try {
       const searchUrl = 'https://complexsearch.kugou.com/v2/search/song?keyword=' + encodeURIComponent(keyword) + '&page=1&pagesize=1'
-      const res = await fetch(searchUrl, {
+      const res = await fetchWithTimeout(searchUrl, {
         headers: { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1' }
       })
       const data = await res.json()
@@ -304,7 +294,7 @@ async function executeBuiltinSource(sourceId, keyword) {
         const hash = song.FileHash || song.HQFileHash
         const albumId = song.AlbumID
         const playUrl = 'https://www.kugou.com/yy/index.php?r=play/getdata&hash=' + hash + '&album_id=' + albumId
-        const playRes = await fetch(playUrl, {
+        const playRes = await fetchWithTimeout(playUrl, {
           headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
         })
         const playData = await playRes.json()
@@ -322,7 +312,7 @@ async function executeBuiltinSource(sourceId, keyword) {
   if (sourceId === 'default-source-netease') {
     try {
       const searchUrl = 'https://music.163.com/api/search/get/web?csrf_token=&type=1&offset=0&limit=5&s=' + encodeURIComponent(keyword)
-      const response = await fetch(searchUrl, {
+      const response = await fetchWithTimeout(searchUrl, {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           'Referer': 'https://music.163.com'
@@ -400,9 +390,9 @@ router.post('/music-sources/:id/reset', async (req, res) => {
 // 一键重置并恢复内置默认音源
 router.post('/music-sources/reset-default', async (req, res) => {
   try {
-    // 1. 删除已经存在的默认音源（防止主键冲突或被修改过的内容遗留）
-    await runAsync("DELETE FROM music_sources WHERE id IN ('default-source-kuwo', 'default-source-kugou', 'default-source-netease')")
-    // 2. 重新初始化注入
+    // 1. 彻底清空所有音源，清除失效或不兼容的自定义音源（如不兼容的混淆洛雪脚本）
+    await runAsync("DELETE FROM music_sources")
+    // 2. 重新置入三大高可用内置音源
     await initDefaultMusicSources()
     res.json({ success: true, message: '默认内置音源已成功恢复并更新！' })
   } catch (error) {
@@ -415,7 +405,7 @@ async function fallbackMusicSearch(keyword) {
   try {
     console.log(`🎵 触发后端硬编码兜底解析 (酷我源): "${keyword}"`)
     const searchUrl = 'https://search.kuwo.cn/r.s?client=kt&all=' + encodeURIComponent(keyword) + '&pn=0&rn=1&ft=music&newver=1&alac=1&vipver=1&issub=1&format=json'
-    const res = await fetch(searchUrl)
+    const res = await fetchWithTimeout(searchUrl)
     const text = await res.text()
     let rid = ''
     const ridMatch = text.match(/'MUSICRID':'([^']+)'/) || text.match(/"MUSICRID":"([^"]+)"/)
@@ -427,7 +417,7 @@ async function fallbackMusicSearch(keyword) {
     }
     if (rid) {
       const playUrl = 'https://antiserver.kuwo.cn/anti.s?type=convert_url&rid=' + rid + '&format=mp3&response=url'
-      const playRes = await fetch(playUrl)
+      const playRes = await fetchWithTimeout(playUrl)
       const audioUrl = await playRes.text()
       if (audioUrl && audioUrl.startsWith('http')) {
         console.log(`✅ 酷我硬编码兜底解析成功: ${audioUrl}`)
@@ -441,7 +431,7 @@ async function fallbackMusicSearch(keyword) {
   try {
     console.log(`🎵 触发后端硬编码兜底解析 (酷狗源): "${keyword}"`)
     const searchUrl = 'https://complexsearch.kugou.com/v2/search/song?keyword=' + encodeURIComponent(keyword) + '&page=1&pagesize=1'
-    const res = await fetch(searchUrl, {
+    const res = await fetchWithTimeout(searchUrl, {
       headers: { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1' }
     })
     const data = await res.json()
@@ -450,7 +440,7 @@ async function fallbackMusicSearch(keyword) {
       const hash = song.FileHash || song.HQFileHash
       const albumId = song.AlbumID
       const playUrl = 'https://www.kugou.com/yy/index.php?r=play/getdata&hash=' + hash + '&album_id=' + albumId
-      const playRes = await fetch(playUrl, {
+      const playRes = await fetchWithTimeout(playUrl, {
         headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }
       })
       const playData = await playRes.json()
@@ -461,6 +451,25 @@ async function fallbackMusicSearch(keyword) {
     }
   } catch (err) {
     console.error('⚠️ 酷狗硬编码兜底解析失败:', err.message)
+  }
+
+  try {
+    console.log(`🎵 触发后端硬编码兜底解析 (网易云外链源): "${keyword}"`)
+    const searchUrl = 'https://music.163.com/api/search/get/web?csrf_token=&type=1&offset=0&limit=5&s=' + encodeURIComponent(keyword)
+    const response = await fetchWithTimeout(searchUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://music.163.com'
+      }
+    })
+    const data = await response.json()
+    if (data && data.result && data.result.songs && data.result.songs.length > 0) {
+      const songId = data.result.songs[0].id
+      console.log(`✅ 网易云外链源硬编码兜底解析成功: SONG_ID=${songId}`)
+      return 'https://music.163.com/song/media/outer/url?id=' + songId + '.mp3'
+    }
+  } catch (err) {
+    console.error('⚠️ 网易云外链源硬编码兜底解析失败:', err.message)
   }
 
   return null
