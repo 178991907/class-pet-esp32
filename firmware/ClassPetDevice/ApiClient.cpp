@@ -205,10 +205,6 @@ VoiceActionResponse ApiClient::postVoiceText(const String& text) {
     res.audio_url = doc["audio_url"].as<String>();
   }
   
-  if (res.action == "search_music") {
-    res.music_keyword = doc["music_keyword"].as<String>();
-  }
-  
   return res;
 }
 

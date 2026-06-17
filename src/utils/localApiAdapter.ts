@@ -332,128 +332,13 @@ export async function localApiAdapter(config: AxiosRequestConfig): Promise<Axios
       }
     }
 
-    if (urlWithoutParams === 'device/music-sources') {
-      if (method === 'get') {
-        const sources = JSON.parse(localStorage.getItem('local_music_sources') || '[]')
-        return createMockResponse(config, 200, { sources })
-      }
-      if (method === 'post') {
-        const sources = JSON.parse(localStorage.getItem('local_music_sources') || '[]')
-        const { id, name, script_code, priority, is_enabled } = body
-        const sourceId = id || Math.random().toString(36).substring(2, 9)
-        const now = Date.now()
-
-        const existingIndex = sources.findIndex((s: any) => s.id === sourceId)
-        if (existingIndex > -1) {
-          sources[existingIndex] = {
-            ...sources[existingIndex],
-            name,
-            script_code,
-            priority: priority || 0,
-            is_enabled: is_enabled !== undefined ? is_enabled : 1
-          }
-        } else {
-          sources.push({
-            id: sourceId,
-            name,
-            script_code,
-            priority: priority || 0,
-            is_enabled: is_enabled !== undefined ? is_enabled : 1,
-            failure_count: 0,
-            created_at: now
-          })
-        }
-        localStorage.setItem('local_music_sources', JSON.stringify(sources))
-        return createMockResponse(config, 200, { success: true, id: sourceId })
-      }
+    // 任务审批/拒绝（本地模式下直接返回成功）
+    if (urlWithoutParams.startsWith('device/tasks/') && urlWithoutParams.endsWith('/approve') && method === 'post') {
+      return createMockResponse(config, 200, { success: true, message: '已审批通过' })
     }
 
-    if (urlWithoutParams.startsWith('device/music-sources/') && method === 'delete') {
-      const sourceId = urlWithoutParams.split('/').pop()
-      let sources = JSON.parse(localStorage.getItem('local_music_sources') || '[]')
-      sources = sources.filter((s: any) => s.id !== sourceId)
-      localStorage.setItem('local_music_sources', JSON.stringify(sources))
-      return createMockResponse(config, 200, { success: true })
-    }
-
-    if (urlWithoutParams.startsWith('device/music-sources/') && urlWithoutParams.endsWith('/reset') && method === 'post') {
-      const sourceId = urlWithoutParams.split('/')[2]
-      const sources = JSON.parse(localStorage.getItem('local_music_sources') || '[]')
-      const source = sources.find((s: any) => s.id === sourceId)
-      if (source) {
-        source.failure_count = 0
-        source.last_failure_at = null
-        localStorage.setItem('local_music_sources', JSON.stringify(sources))
-        return createMockResponse(config, 200, { success: true })
-      }
-      return createMockResponse(config, 404, { error: '音乐源不存在' })
-    }
-
-    if (urlWithoutParams === 'device/music/search' && method === 'get') {
-      const keyword = (queryParams.keyword || '音乐').trim()
-      const sourceId = queryParams.source_id || ''
-
-      // 可公开免费播放的高质量 MP3 音频库（来自 pixabay / samplelib 等公共域）
-      // 每个条目对应不同风格的真实音频，确保搜索不同歌曲时听到完全不同的音乐
-      const audioLibrary: Record<string, { url: string; title: string }> = {
-        '童话': {
-          url: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
-          title: '童话'
-        },
-        '晴天': {
-          url: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3',
-          title: '晴天'
-        },
-        '小幸运': {
-          url: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3',
-          title: '小幸运'
-        },
-        '我爱你': {
-          url: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-4.mp3',
-          title: '我爱你'
-        },
-        '七里香': {
-          url: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-5.mp3',
-          title: '七里香'
-        },
-        '江南': {
-          url: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-6.mp3',
-          title: '江南'
-        },
-        '慢慢喜欢你': {
-          url: 'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-7.mp3',
-          title: '慢慢喜欢你'
-        }
-      }
-
-      // 全量候选列表，用于哈希映射自定义搜索
-      const allUrls = Object.values(audioLibrary).map(a => a.url)
-
-      // 1. 精准关键字匹配
-      let mockUrl = ''
-      for (const [key, audio] of Object.entries(audioLibrary)) {
-        if (keyword.includes(key)) {
-          mockUrl = audio.url
-          break
-        }
-      }
-
-      // 2. 未精准匹配的歌曲：哈希映射到不同音轨，确保不同歌名/不同音源播放不同歌曲
-      if (!mockUrl) {
-        let hash = 0
-        for (let i = 0; i < keyword.length; i++) {
-          hash = ((hash << 5) - hash + keyword.charCodeAt(i)) | 0
-        }
-        for (let i = 0; i < sourceId.length; i++) {
-          hash = ((hash << 5) - hash + sourceId.charCodeAt(i)) | 0
-        }
-        mockUrl = allUrls[Math.abs(hash) % allUrls.length]
-      }
-
-      return createMockResponse(config, 200, {
-        keyword,
-        url: mockUrl
-      })
+    if (urlWithoutParams.startsWith('device/tasks/') && urlWithoutParams.endsWith('/reject') && method === 'post') {
+      return createMockResponse(config, 200, { success: true, message: '已拒绝' })
     }
 
     // 默认回包

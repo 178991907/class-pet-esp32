@@ -1,17 +1,8 @@
 import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import crypto from 'crypto'
-import vm from 'vm'
 import { getAsync, allAsync, runAsync } from '../db.js'
 import { calculateLevel } from '../utils/level.js'
-
-// 全局拦截异步未捕获的 Rejection 与 Exception，防止在 Vercel Serverless 环境下由于沙箱 Promise 失败导致 502 崩溃进程
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('⚠️ [系统防崩卫士] 拦截到未捕获的 Promise Rejection:', reason)
-})
-process.on('uncaughtException', (err) => {
-  console.error('⚠️ [系统防崩卫士] 拦截到未捕获的 Exception:', err.message || err)
-})
 
 const router = Router()
 
@@ -291,7 +282,7 @@ router.post('/voice', deviceAuthMiddleware, async (req, res) => {
     } else if (nlpResult.action === 'query_status') {
       const latestStudent = await getAsync('SELECT * FROM students WHERE id = ?', student.id)
       responseData.reply_text = `你当前的积分总计 ${latestStudent.total_points} 分，宠物当前处于等级 ${latestStudent.pet_level}。加油！`
-
+    }
 
     res.json(responseData)
   } catch (error) {

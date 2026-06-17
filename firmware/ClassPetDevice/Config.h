@@ -56,7 +56,7 @@ enum DeviceState {
   STATE_NORMAL_OFFLINE,// 离线正常待机状态
   STATE_PROCESSING,    // 正在请求云端 API
   STATE_RECORDING,     // 正在录音
-  STATE_PLAYING_AUDIO, // 正在播放音频（TTS 或 音乐）
+  STATE_PLAYING_AUDIO, // 正在播放音频（TTS 语音合成）
   STATE_POMODORO       // 本地番茄钟计时中
 };
 

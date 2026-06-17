@@ -68,25 +68,6 @@ export async function initDb() {
       // 忽略已存在字段报错
     }
 
-    // 动态检查并创建 music_sources 表，确保即使在已有数据库上升级也能正常就绪
-    try {
-      await pgPool.query(`
-        CREATE TABLE IF NOT EXISTS music_sources (
-          id VARCHAR(64) PRIMARY KEY,
-          name VARCHAR(128) NOT NULL,
-          script_code TEXT NOT NULL,
-          priority INTEGER DEFAULT 0,
-          is_enabled INTEGER DEFAULT 1,
-          failure_count INTEGER DEFAULT 0,
-          last_failure_at BIGINT,
-          created_at BIGINT NOT NULL
-        )
-      `)
-      console.log("🎵 [PostgreSQL] 已确保 music_sources 表存在")
-    } catch (err) {
-      console.error("❌ [PostgreSQL] 确保 music_sources 表失败:", err.message)
-    }
-
     // 动态检查并创建 student_task_applications 表
     try {
       await pgPool.query(`
@@ -237,17 +218,6 @@ export async function initDb() {
         FOREIGN KEY (student_id) REFERENCES students(id)
       );
 
-      -- 多音源配置表
-      CREATE TABLE IF NOT EXISTS music_sources (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        script_code TEXT NOT NULL,
-        priority INTEGER DEFAULT 0,
-        is_enabled INTEGER DEFAULT 1,
-        failure_count INTEGER DEFAULT 0,
-        last_failure_at INTEGER,
-        created_at INTEGER NOT NULL
-      );
     `)
 
     // 动态检查并添加 students 的 device_id 字段

@@ -120,20 +120,16 @@ public:
     return random(20, 80); // 模拟噪音分贝跳动
   }
   bool playAudioStream(const String& url) override {
-    Serial.printf("🔊 [音频] 🎵 正在开始异步拉取并播放音频直链: %s\n", url.c_str());
+    Serial.printf("🔊 [音频] 正在开始异步拉取并播放音频直链: %s\n", url.c_str());
     is_playing = true;
     play_start = millis();
-    // 模拟检测如果是 TTS (通常带 q= 或者是 tts 关键字) 播放 3 秒，如果是音乐则模拟长播放
-    if (url.indexOf("translate_tts") > 0 || url.indexOf("/tts") > 0) {
-      play_duration = 4000;
-    } else {
-      play_duration = 10000; // 模拟音乐播放 10 秒
-    }
+    // TTS 语音合成播放，模拟 4 秒播放时长
+    play_duration = 4000;
     return true;
   }
   void stopAudio() override {
     if (is_playing) {
-      Serial.println("🔊 [音频] 🎵 停止播放当前音频。");
+      Serial.println("🔊 [音频] 停止播放当前音频。");
       is_playing = false;
     }
   }
@@ -146,7 +142,7 @@ public:
   void update() override {
     // 模拟音频自动播完逻辑
     if (is_playing && (millis() - play_start > play_duration)) {
-      Serial.println("🔊 [音频] 🎵 模拟音频拉取播放完毕。");
+      Serial.println("🔊 [音频] 模拟音频拉取播放完毕。");
       is_playing = false;
     }
   }
@@ -349,7 +345,7 @@ void loop() {
 
     case STATE_PLAYING_AUDIO: {
       // 当音频正在播放时，维持在播放状态，由 update() 自动流式运转并渲染正在播音提示
-      display->showProcessingScreen("正在播放语音/音乐");
+      display->showProcessingScreen("正在播放语音");
       if (!audio->isPlaying()) {
         DEBUG_PRINTLN("🔊 播音结束，切回在线待机");
         // 重新拉取一次最新的状态数据以反应积分累加
@@ -469,7 +465,7 @@ void triggerSimulatedVoiceDeclaration() {
   const char* testTexts[] = {
     "我完成了认真打扫卫生", 
     "帮我申请平时测验满分",
-    "帮我播放一首经典童话",
+    "我完成了早读认真专注",
     "查询我现在多少分"
   };
   String selectedText = testTexts[random(0, 4)];

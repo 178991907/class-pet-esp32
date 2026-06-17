@@ -42,7 +42,7 @@ public:
   static void clearOfflineQueue();
 
 private:
-  static const int EEPROM_SIZE = 1024; // 分配 1024 字节存储空间
+  static const int EEPROM_SIZE = 2048; // 分配 2048 字节存储空间（需容纳配置+20条离线任务队列）
   
   // 地址分配
   static const int ADDR_CONFIG = 0; // 配置结构体起始地址

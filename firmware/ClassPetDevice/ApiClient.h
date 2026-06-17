@@ -39,7 +39,6 @@ struct VoiceActionResponse {
   String action;
   String reply_text;
   String audio_url; // 异步合成的 TTS 地址
-  String music_keyword; // 找歌动作时的关键字
   String error_msg;
 };
 
