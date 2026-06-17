@@ -83,18 +83,6 @@ CREATE TABLE IF NOT EXISTS student_task_applications (
     created_at BIGINT NOT NULL
 );
 
--- 9. 多音源配置表 (阶段二、三核心表)
-CREATE TABLE IF NOT EXISTS music_sources (
-    id VARCHAR(64) PRIMARY KEY,
-    name VARCHAR(128) NOT NULL,
-    script_code TEXT NOT NULL,
-    priority INTEGER DEFAULT 0,
-    is_enabled INTEGER DEFAULT 1,
-    failure_count INTEGER DEFAULT 0,
-    last_failure_at BIGINT,
-    created_at BIGINT NOT NULL
-);
-
 -- ================= 索引优化 (提升高频 API 响应) =================
 CREATE INDEX IF NOT EXISTS idx_classes_user_id ON classes(user_id);
 CREATE INDEX IF NOT EXISTS idx_students_class_id ON students(class_id);

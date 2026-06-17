@@ -36,10 +36,17 @@ async function initClient() {
 }
 
 // 占位符转换函数：将 SQLite 的 "?" 占位符转换为 PostgreSQL 的 "$1", "$2" 等
+// 同时将 SQLite 特有的 INSERT OR IGNORE 转为 PostgreSQL 兼容的 ON CONFLICT DO NOTHING
 function convertPlaceholder(sql) {
   if (!isPostgres) return sql
   let index = 1
-  return sql.replace(/\?/g, () => `$${index++}`)
+  let converted = sql.replace(/\?/g, () => `$${index++}`)
+  // 兼容 SQLite 的 INSERT OR IGNORE 语法
+  converted = converted.replace(/INSERT\s+OR\s+IGNORE\s+INTO/gi, 'INSERT INTO')
+  if (/INSERT\s+INTO/i.test(sql) && /OR\s+IGNORE/i.test(sql)) {
+    converted = converted.replace(/VALUES\s*\(([^)]+)\)/i, 'VALUES ($1) ON CONFLICT DO NOTHING')
+  }
+  return converted
 }
 
 // 初始化数据库表结构与预置数据

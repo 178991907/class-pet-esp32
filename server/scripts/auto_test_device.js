@@ -1,7 +1,7 @@
 /**
  * @file auto_test_device.js
  * @brief 班级宠物园通用硬件 API - 自动化集成测试脚本
- * @note 用于测试签名机制、防重放校验、自动确认懒加载、意图分类与音乐源熔断等核心 API 的正确性
+ * @note 用于测试签名机制、防重放校验、自动确认懒加载、意图分类等核心 API 的正确性
  */
 
 import Database from 'better-sqlite3'
@@ -16,7 +16,6 @@ const DB_PATH = './server/pet-garden.db'
 let testStudentId = 'test-student-uuid-123'
 let testClassId = 'test-class-uuid-123'
 let testUserId = 'test-user-uuid-123'
-let testMusicSourceId = 'test-music-source-uuid-123'
 
 // 辅助工具：计算签名
 function calculateSignature(timestamp, body = '') {
@@ -98,13 +97,6 @@ function setupTestData() {
   db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('task_confirm_mode', '\"auto\"')").run()
   db.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('task_confirm_delay', '30')").run()
 
-  // 5. 插入一条测试音乐源，用来执行 Failover 熔断测试
-  db.prepare("DELETE FROM music_sources WHERE id = ?").run(testMusicSourceId)
-  db.prepare(`
-    INSERT INTO music_sources (id, name, script_code, priority, is_enabled, failure_count, created_at)
-    VALUES (?, '测试故障音源', 'throw new Error("模拟音源出错");', 10, 1, 0, ?)
-  `).run(testMusicSourceId, Date.now())
-
   db.close()
   console.log('✅ 测试环境初始化成功。学生:小明 (已绑定设备:AA:BB:CC:DD:11:22)。')
 }
@@ -180,28 +172,8 @@ async function runTests() {
   db2.close()
   console.log('--- 测试 4 完成 ---\n')
 
-  // ---------------- 测试 5: 音乐 Failover 故障熔断机制 ----------------
-  console.log('5. 开始测试: 音乐解析 Failover 降级与熔断机制...')
-  
-  // 强制向一个会出错的音乐源发送 3 次搜索，引发连续故障以验证熔断
-  console.log('   ℹ️ 发送 3 次异常音乐搜索，触发自动熔断...')
-  for (let i = 0; i < 3; i++) {
-    await sendRequest('/api/device/music/search?keyword=test-failure')
-  }
-
-  // 数据库检查该音源的 failure_count 和熔断状态
-  const db3 = new Database(DB_PATH)
-  const src = db3.prepare("SELECT failure_count FROM music_sources WHERE id = ?").get(testMusicSourceId)
-  assert(src.failure_count >= 3, '连续故障后，该测试音源的失败计数应达到并大于 3')
-  db3.close()
-
-  // 此时再请求搜索，它应该由于熔断被过滤掉
-  const finalSearch = await sendRequest('/api/device/music/search?keyword=test-failure')
-  assert(finalSearch.status === 503 || finalSearch.status === 502, '无可用未熔断音源时应返回 502 或 503')
-  console.log('--- 测试 5 完成 ---\n')
-
-  // ---------------- 测试 6: 通用固件 OTA 版本检查 ----------------
-  console.log('6. 开始测试: 通用固件 OTA 版本及链接返回 (GET /api/device/firmware-version)...')
+  // ---------------- 测试 5: 通用固件 OTA 版本检查 ----------------
+  console.log('5. 开始测试: 通用固件 OTA 版本及链接返回 (GET /api/device/firmware-version)...')
   const fwRes = await sendRequest(`/api/device/firmware-version?device_id=${DEVICE_ID}`, 'GET')
   assert(fwRes.status === 200, 'HTTP 状态码应为 200')
   assert(fwRes.data.latest_version === '2.0.0', '最新版本号应该是 2.0.0')
@@ -225,7 +197,6 @@ function cleanupTestData() {
   db.prepare("DELETE FROM badges WHERE student_id = ?").run(testStudentId)
   db.prepare("DELETE FROM students WHERE id = ?").run(testStudentId)
   db.prepare("DELETE FROM classes WHERE id = ?").run(testClassId)
-  db.prepare("DELETE FROM music_sources WHERE id = ?").run(testMusicSourceId)
   db.close()
   console.log('🧹 垃圾清理完成。')
 }

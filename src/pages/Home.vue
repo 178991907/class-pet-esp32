@@ -6,25 +6,7 @@ import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import AuthModal from '@/components/AuthModal.vue'
 import { useToast } from '@/composables/useToast'
 import { useAuth } from '@/composables/useAuth'
-
-// Types
-interface Class {
-  id: string
-  name: string
-  created_at: number
-}
-
-interface Student {
-  id: string
-  class_id: string
-  name: string
-  student_no: string | null
-  device_id?: string | null
-  total_points: number
-  pet_type: string | null
-  pet_level: number
-  pet_exp: number
-}
+import type { Class, Student } from '@/types'
 
 // Toast 提示
 const toast = useToast()

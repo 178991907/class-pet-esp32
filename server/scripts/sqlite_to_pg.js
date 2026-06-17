@@ -93,8 +93,7 @@ async function runMigration() {
     'badges',
     'evaluation_rules',
     'evaluation_records',
-    'student_task_applications',
-    'music_sources'
+    'student_task_applications'
   ]
 
   console.log('🔄 开始平移各表数据...')

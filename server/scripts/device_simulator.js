@@ -153,17 +153,7 @@ function testVoiceCommand() {
           console.log(`   - 🔊 设备异步播放 TTS 音频地址: ${colors.blue}${data.audio_url}${colors.reset}`)
         }
         
-        if (data.action === 'search_music') {
-          console.log(`   - 🎵 触发后台音乐搜索，关键字: ${colors.yellow}${data.music_keyword}${colors.reset}`)
-          console.log(`   - 🔄 正在请求音乐高可用接口获取直链...`)
-          
-          const musicRes = await sendRequest(`/api/device/music/search?keyword=${encodeURIComponent(data.music_keyword)}`)
-          if (musicRes.status === 200) {
-            console.log(`   - 🎶 音乐获取成功！直链: ${colors.green}${musicRes.data.url}${colors.reset}`)
-          } else {
-            console.log(`   - ❌ 音乐检索失败 (可能音源已熔断): ${musicRes.data.error}`)
-          }
-        }
+
       } else {
         console.log(`${colors.red}❌ 请求核销失败 (状态码 ${status}):${colors.reset}`, data)
       }
@@ -209,39 +199,10 @@ async function testPomodoroFinished(isOffline = false) {
 }
 
 /**
- * 场景4: 模拟音乐源 Failover 故障转移和自动熔断测试
- */
-async function testMusicCircuitBreaker() {
-  console.log(`\n[${colors.cyan}场景 4: 音乐源 Failover 降级与连续故障熔断自测${colors.reset}]`)
-  console.log(`提示: 我们将连续对一个垃圾关键字进行 4 次搜索，模拟多音源加载失败。`)
-  
-  for (let i = 1; i <= 4; i++) {
-    console.log(`\n🔄 [第 ${i} 次搜索] 正在请求 /api/device/music/search?keyword=dummy-err-music ...`)
-    try {
-      const { status, data } = await sendRequest('/api/device/music/search?keyword=dummy-err-music')
-      if (status === 200) {
-        console.log(`${colors.green}   -> 解析成功: ${data.url}${colors.reset}`)
-      } else {
-        console.log(`${colors.red}   -> 服务器失败 (状态码 ${status}): ${data.error}${colors.reset}`)
-      }
-    } catch (err) {
-      console.log(`${colors.red}   -> 网络故障:${colors.reset} ${err.message}`)
-    }
-    // 短暂延时
-    await new Promise(r => setTimeout(r, 600))
-  }
-  
-  console.log(`\n${colors.bright}ℹ️ 熔断测试分析:${colors.reset}`)
-  console.log(`   后端对每个启用的音乐源维护了 failure_count。当连续报错达到 3 次时，将标记为熔断。`)
-  console.log(`   请去教师管理后台面板查阅 [系统健康仪表盘] 的音乐源失败状态和熔断情况。`)
-  pressEnterToContinue()
-}
-
-/**
- * 场景5: 模拟离线故障，恢复连接后自动串行安全补传
+ * 场景4: 模拟离线故障，恢复连接后自动串行安全补传
  */
 async function testOfflineReconnectionSync() {
-  console.log(`\n[${colors.cyan}场景 5: 模拟断网自愈与离线数据队列同步${colors.reset}]`)
+  console.log(`\n[${colors.cyan}场景 4: 模拟断网自愈与离线数据队列同步${colors.reset}]`)
   
   if (offlineQueue.length === 0) {
     console.log(`ℹ️ 当前离线暂存队列为空。现在自动生成 2 条离线专注申报记录...`)
@@ -281,7 +242,7 @@ async function testOfflineReconnectionSync() {
  * 场景6: 安全校验 - 时间戳重放攻击防御测试
  */
 async function testReplayAttackPrevention() {
-  console.log(`\n[${colors.cyan}场景 6: 安全验证 - 时间戳过期与防重放攻击${colors.reset}]`)
+  console.log(`\n[${colors.cyan}场景 5: 安全验证 - 时间戳过期与防重放攻击${colors.reset}]`)
   
   // 模拟当前时间 5 分钟前（300,000毫秒前）的被劫持过时请求
   const expiredTimestamp = Date.now() - 5 * 60 * 1000 
@@ -315,14 +276,13 @@ function displayMenu() {
   console.log(`后端 API 服务地址: ${colors.blue}${SERVER_URL}${colors.reset}`)
   console.log(`-----------------------------------------------------`)
   console.log(`[1] 查询当前绑定的学生及宠物等级/经验 (${colors.green}GET /status${colors.reset})`)
-  console.log(`[2] 语音交互与申报测试 (加分/查状态/听歌) (${colors.green}POST /voice${colors.reset})`)
+  console.log(`[2] 语音交互与申报测试 (加分/查状态) (${colors.green}POST /voice${colors.reset})`)
   console.log(`[3] 本地番茄钟专注结束 (模拟在线加分 / 离线暂存)`)
-  console.log(`[4] 触发高可用音乐 Failover 和连续报错熔断自测`)
-  console.log(`[5] 模拟网络故障恢复后的离线数据队列同步续传`)
-  console.log(`[6] 模拟时间戳伪造与重放攻击拦截校验测试 (安全拦截)`)
+  console.log(`[4] 模拟网络故障恢复后的离线数据队列同步续传`)
+  console.log(`[5] 模拟时间戳伪造与重放攻击拦截校验测试 (安全拦截)`)
   console.log(`[0] 退出模拟器`)
   console.log(`=====================================================`)
-  rl.question('请选择测试场景 [0-6]: ', handleMenuInput)
+  rl.question('请选择测试场景 [0-5]: ', handleMenuInput)
 }
 
 function handleMenuInput(choice) {
@@ -341,12 +301,9 @@ function handleMenuInput(choice) {
       })
       break
     case '4':
-      testMusicCircuitBreaker()
-      break
-    case '5':
       testOfflineReconnectionSync()
       break
-    case '6':
+    case '5':
       testReplayAttackPrevention()
       break
     case '0':
