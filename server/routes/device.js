@@ -208,183 +208,6 @@ function getLevelProgress(exp) {
 }
 
 
-// ================= 2. 隔离安全沙箱与多音源 Failover =================
-
-// 带有超时保护的安全 fetch 封装，防止在 Serverless 平台由于网络挂起导致云函数被平台强杀
-async function fetchWithTimeout(url, options = {}, timeout = 1500) {
-  const controller = new AbortController()
-  const id = setTimeout(() => controller.abort(), timeout)
-  try {
-    const response = await fetch(url, {
-      ...options,
-      signal: controller.signal
-    })
-    clearTimeout(id)
-    return response
-  } catch (err) {
-    clearTimeout(id)
-    throw err
-  }
-}
-
-// 纯原生内置安全沙箱执行器 (防 native addons 编译及加载风险，完美兼容 Vercel)
-async function safeSandboxExecute(code, contextVars = {}) {
-  // 注入带 1.5 秒超时限制的网络请求及处理工具
-  const context = vm.createContext({
-    console,
-    fetch: (url, opts) => fetchWithTimeout(url, opts, 1500), // 限制沙箱内部网络请求最多 1.5 秒
-    URLSearchParams: typeof URLSearchParams !== 'undefined' ? URLSearchParams : undefined,
-    Buffer: typeof Buffer !== 'undefined' ? Buffer : undefined,
-    process: {
-      env: {
-        NODE_ENV: process.env.NODE_ENV
-      }
-    },
-    ...contextVars
-  })
-  const script = new vm.Script(code)
-  // 5000ms 执行超时限制
-  const result = script.runInContext(context, { timeout: 5000 })
-
-  // 如果沙箱内返回的是一个 Promise，我们在外部进行 await 等待其决议
-  if (result && typeof result.then === 'function') {
-    return await result
-  }
-  return result
-}
-
-
-
-// ================= 音源管理 CRUD API（Web 管理后台使用） =================
-
-// 获取所有音源列表
-router.get('/music-sources', async (req, res) => {
-  try {
-    const sources = await allAsync('SELECT * FROM music_sources ORDER BY priority DESC, created_at DESC')
-    res.json({ sources })
-  } catch (error) {
-    console.error('获取音源列表失败:', error)
-    res.status(500).json({ error: '获取音源列表失败', details: error.message })
-  }
-})
-
-// 新增音源
-router.post('/music-sources', async (req, res) => {
-  const { id, name, script_code, priority } = req.body
-  if (!name || !script_code) {
-    return res.status(400).json({ error: '缺少音源名称或脚本代码' })
-  }
-  try {
-    const sourceId = id || `src-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`
-    await runAsync(
-      'INSERT INTO music_sources (id, name, script_code, priority, is_enabled, failure_count, created_at) VALUES (?, ?, ?, ?, 1, 0, ?)',
-      sourceId, name, script_code, priority || 0, Date.now()
-    )
-    res.status(201).json({ success: true, id: sourceId })
-  } catch (error) {
-    console.error('新增音源失败:', error)
-    res.status(500).json({ error: '新增音源失败', details: error.message })
-  }
-})
-
-// 删除音源
-router.delete('/music-sources/:id', async (req, res) => {
-  try {
-    await runAsync('DELETE FROM music_sources WHERE id = ?', req.params.id)
-    res.json({ success: true })
-  } catch (error) {
-    console.error('删除音源失败:', error)
-    res.status(500).json({ error: '删除音源失败' })
-  }
-})
-
-// 重置音源熔断计数
-router.post('/music-sources/:id/reset', async (req, res) => {
-  try {
-    await runAsync('UPDATE music_sources SET failure_count = 0, last_failure_at = NULL WHERE id = ?', req.params.id)
-    res.json({ success: true })
-  } catch (error) {
-    console.error('重置音源失败:', error)
-    res.status(500).json({ error: '重置音源失败' })
-  }
-})
-
-
-
-// 通用设备音乐搜索 API (仅执行自定义音源，具有降级和熔断机制)
-router.get('/music/search', deviceAuthMiddleware, async (req, res) => {
-  const { keyword, source_id } = req.query
-
-  if (!keyword || !keyword.trim()) {
-    return res.status(400).json({ error: '缺少搜索关键字 keyword' })
-  }
-
-  try {
-    let sources = []
-    if (source_id) {
-      // 1. 用户显式指定了音源：只查询该特定的启用且未熔断的音源
-      sources = await allAsync(
-        'SELECT * FROM music_sources WHERE id = ? AND is_enabled = 1 AND failure_count < 3',
-        source_id
-      )
-    } else {
-      // 2. 硬件设备盲搜：获取全部启用且未熔断的音源按优先级降序
-      sources = await allAsync(`
-        SELECT * FROM music_sources
-        WHERE is_enabled = 1 AND failure_count < 3
-        ORDER BY priority DESC, created_at DESC
-      `)
-    }
-
-    if (sources.length === 0) {
-      return res.status(502).json({ error: '数据库中当前无可用的自定义音源配置或均已熔断' })
-    }
-
-    let playUrl = null
-    let usedSourceId = null
-
-    for (const src of sources) {
-      try {
-        console.log(`🎵 沙箱执行自定义源 [${src.name}] 搜索: "${keyword}"`)
-        const result = await safeSandboxExecute(src.script_code, { keyword: keyword.trim() })
-
-        if (result && typeof result === 'string' && result.startsWith('http')) {
-          playUrl = result
-          usedSourceId = src.id
-          break // 成功获取，跳出重试环
-        } else {
-          throw new Error('未返回有效的 MP3 直链')
-        }
-      } catch (err) {
-        console.error(`❌ 自定义音源 [${src.name}] 执行异常:`, err.message)
-        // 失败计数 +1 并在达到阈值时记录失败时间进行自动熔断
-        await runAsync(
-          'UPDATE music_sources SET failure_count = failure_count + 1, last_failure_at = ? WHERE id = ?',
-          Date.now(),
-          src.id
-        )
-      }
-    }
-
-    if (!playUrl) {
-      return res.status(502).json({ error: '所有启用的自定义音乐源解析均已失效或熔断' })
-    }
-
-    // 成功解析后，重置该源的失败计数
-    if (usedSourceId) {
-      await runAsync('UPDATE music_sources SET failure_count = 0, last_failure_at = NULL WHERE id = ?', usedSourceId)
-    }
-
-    res.json({
-      keyword,
-      url: playUrl
-    })
-  } catch (error) {
-    console.error('音乐检索流程异常:', error)
-    res.status(500).json({ error: '音乐搜索接口异常', details: error.message })
-  }
-})
-
 
 // ================= 3. 语音 ASR 与大模型 NLP 意图分类 API =================
 
@@ -468,10 +291,7 @@ router.post('/voice', deviceAuthMiddleware, async (req, res) => {
     } else if (nlpResult.action === 'query_status') {
       const latestStudent = await getAsync('SELECT * FROM students WHERE id = ?', student.id)
       responseData.reply_text = `你当前的积分总计 ${latestStudent.total_points} 分，宠物当前处于等级 ${latestStudent.pet_level}。加油！`
-    } else if (nlpResult.action === 'search_music') {
-      responseData.music_keyword = nlpResult.music_keyword || '童话'
-      responseData.reply_text = `正在为您寻找音乐《${responseData.music_keyword}》，请稍候...`
-    }
+
 
     res.json(responseData)
   } catch (error) {
@@ -484,13 +304,11 @@ router.post('/voice', deviceAuthMiddleware, async (req, res) => {
 function regexClassifyIntent(text) {
   const t = text.trim()
 
-  // 1. 音乐搜索判定
+  // 1. 音乐搜索判定 (已停用)
   if (/(听|播放|唱|来一首|放一首|点歌|搜歌|音乐)/.test(t)) {
-    const musicKeyword = t.replace(/(请|帮我|我要|听|播放|唱|来一首|放一首|点歌|搜歌|音乐|的歌)/g, '').trim() || '童声音乐'
     return {
-      action: 'search_music',
-      music_keyword: musicKeyword,
-      reply_text: `正在为您搜索音乐：${musicKeyword}`
+      action: 'none',
+      reply_text: '抱歉，当前系统的音乐播放功能已关闭。'
     }
   }
 
