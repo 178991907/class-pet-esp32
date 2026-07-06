@@ -55,7 +55,7 @@ router.post('/', authMiddleware, async (req, res) => {
     await runAsync('INSERT INTO students (id, class_id, name, student_no, device_id, total_points, pet_level, pet_exp, created_at) VALUES (?, ?, ?, ?, ?, 0, 1, 0, ?)', id, classId, name, studentNo || null, deviceId || null, now)
     res.json({ id, class_id: classId, name, student_no: studentNo || null, device_id: deviceId || null, total_points: 0, pet_level: 1, pet_exp: 0, created_at: now })
   } catch (error) {
-    res.status(500).json({ error: '添加学生失败' })
+    res.status(500).json({ error: '添加学生失败: ' + error.message })
   }
 })
 
