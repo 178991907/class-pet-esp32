@@ -191,7 +191,7 @@ function getDbData(): LocalDbData {
         parsed.users.push({
           id: 'admin',
           username: 'admin',
-          password_hash: 'admin123', // 本地 Mock DB 中保存为明文密码，与 server 端哈希后密码有所区别
+          password_hash: 'admin', // 本地 Mock DB 中保存为明文密码，与 server 端哈希后密码有所区别
           is_guest: false,
           role: 'admin',
           created_at: Date.now(),
@@ -205,10 +205,10 @@ function getDbData(): LocalDbData {
           adminUser.is_guest = false
           migrated = true
         }
-        // 未被显式修改过密码且密码不为默认密码时，强制纠错并重置为默认密码 admin123
+        // 未被显式修改过密码且密码不为默认密码时，强制纠错并重置为默认密码 admin
         const isModified = adminUser.is_password_modified || (adminUser as any).isPasswordModified
-        if (!isModified && adminUser.password_hash !== 'admin123') {
-          adminUser.password_hash = 'admin123'
+        if (!isModified && adminUser.password_hash !== 'admin') {
+          adminUser.password_hash = 'admin'
           adminUser.is_password_modified = false
           migrated = true
         }
@@ -289,7 +289,7 @@ function getDbData(): LocalDbData {
       {
         id: 'admin',
         username: 'admin',
-        password_hash: 'admin123',
+        password_hash: 'admin',
         is_guest: false,
         role: 'admin',
         created_at: Date.now()
