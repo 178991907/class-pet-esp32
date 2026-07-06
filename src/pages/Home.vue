@@ -95,6 +95,25 @@ const systemActiveTab = ref('tasks')
 const pendingTasks = ref<any[]>([])
 const taskConfirmMode = ref('auto')
 const taskConfirmDelay = ref(30)
+const openrouterApiKey = ref('')
+const openrouterModel = ref('openrouter/free')
+const screenBrightness = ref(80)
+const screenSleepSeconds = ref(15)
+
+// 日程管理与聊天审计变量
+const showChatLogsModal = ref(false)
+const chatLogsList = ref<any[]>([])
+const loadingChatLogs = ref(false)
+const auditingStudent = ref<any>(null)
+
+const showSchedulesModal = ref(false)
+const schedulesList = ref<any[]>([])
+const loadingSchedules = ref(false)
+const schedulingStudent = ref<any>(null)
+const newScheduleDay = ref(1)
+const newScheduleTime = ref('08:00')
+const newScheduleTask = ref('')
+
 
 // 用户权限管理 (管理员专用)
 const usersList = ref<any[]>([])
@@ -977,11 +996,13 @@ async function loadSystemData() {
     const settingsRes = await api.get('/device/settings')
     taskConfirmMode.value = settingsRes.data.task_confirm_mode
     taskConfirmDelay.value = settingsRes.data.task_confirm_delay
+    openrouterApiKey.value = settingsRes.data.openrouter_api_key || ''
+    openrouterModel.value = settingsRes.data.openrouter_model || 'openrouter/free'
+    screenBrightness.value = settingsRes.data.screen_brightness ?? 80
+    screenSleepSeconds.value = settingsRes.data.screen_sleep_seconds ?? 15
   } catch (err) {
     console.error('加载系统配置失败:', err)
   }
-
-
 }
 
 async function openSystemModal() {
@@ -1018,13 +1039,82 @@ async function saveSystemSettings() {
   try {
     await api.post('/device/settings', {
       task_confirm_mode: taskConfirmMode.value,
-      task_confirm_delay: Number(taskConfirmDelay.value)
+      task_confirm_delay: Number(taskConfirmDelay.value),
+      openrouter_api_key: openrouterApiKey.value,
+      openrouter_model: openrouterModel.value,
+      screen_brightness: Number(screenBrightness.value),
+      screen_sleep_seconds: Number(screenSleepSeconds.value)
     })
     toast.success('系统设置保存成功！')
   } catch (err) {
     toast.error('设置保存失败')
   }
 }
+
+// 日程管理方法
+async function openSchedules(student: any) {
+  schedulingStudent.value = student
+  loadingSchedules.value = true
+  showSchedulesModal.value = true
+  try {
+    const res = await api.get(`/device/schedules/student/${student.id}`)
+    schedulesList.value = res.data.schedules || []
+  } catch (err) {
+    toast.error('加载日程失败')
+  } finally {
+    loadingSchedules.value = false
+  }
+}
+
+async function addSchedule() {
+  if (!schedulingStudent.value) return
+  if (!newScheduleTask.value.trim()) {
+    toast.error('请输入日程提醒内容')
+    return
+  }
+  try {
+    await api.post(`/device/schedules/student/${schedulingStudent.value.id}`, {
+      day_of_week: Number(newScheduleDay.value),
+      time_str: newScheduleTime.value,
+      task_desc: newScheduleTask.value.trim()
+    })
+    toast.success('日程添加成功！')
+    newScheduleTask.value = ''
+    const res = await api.get(`/device/schedules/student/${schedulingStudent.value.id}`)
+    schedulesList.value = res.data.schedules || []
+  } catch (err) {
+    toast.error('添加日程失败')
+  }
+}
+
+async function deleteSchedule(id: string) {
+  try {
+    await api.delete(`/device/schedules/${id}`)
+    toast.success('日程已删除')
+    if (schedulingStudent.value) {
+      const res = await api.get(`/device/schedules/student/${schedulingStudent.value.id}`)
+      schedulesList.value = res.data.schedules || []
+    }
+  } catch (err) {
+    toast.error('删除日程失败')
+  }
+}
+
+// 聊天审计方法
+async function openChatLogs(student: any) {
+  auditingStudent.value = student
+  loadingChatLogs.value = true
+  showChatLogsModal.value = true
+  try {
+    const res = await api.get(`/device/chat-logs/student/${student.id}`)
+    chatLogsList.value = res.data.logs || []
+  } catch (err) {
+    toast.error('加载对话记录失败')
+  } finally {
+    loadingChatLogs.value = false
+  }
+}
+
 
 
 // Initialize
@@ -1419,6 +1509,21 @@ onMounted(async () => {
                 <span v-if="(batchMode && selectedStudents.has(student.id)) || (showDeleteStudentMode && deleteStudentList.includes(student.id))" class="text-white text-sm font-bold">✓</span>
               </div>
             </Transition>
+            
+            <!-- 设备心跳与电量状态栏 -->
+            <div 
+              v-if="!batchMode && !showDeleteStudentMode && student.device_id"
+              class="absolute top-3 left-3 px-2 py-0.5 rounded-full text-[10px] font-extrabold flex items-center gap-1 shadow-md bg-white/95 z-10 transition-all"
+              :class="student.last_seen && (Date.now() - student.last_seen < 60000) ? 'text-green-600 border border-green-100' : 'text-gray-400 border border-gray-100'"
+            >
+              <span class="w-1.5 h-1.5 rounded-full" :class="student.last_seen && (Date.now() - student.last_seen < 60000) ? 'bg-green-500 animate-pulse' : 'bg-gray-300'"></span>
+              <span v-if="student.is_charging" class="text-amber-500 flex items-center gap-0.5">
+                ⚡ {{ student.battery_level }}%
+              </span>
+              <span v-else>
+                🔋 {{ student.battery_level ?? 100 }}%
+              </span>
+            </div>
             
             <!-- 宠物图片区域 -->
             <div class="aspect-square flex items-center justify-center relative rounded-t-2xl"
@@ -2020,6 +2125,14 @@ onMounted(async () => {
           <div class="relative bg-gradient-to-r from-orange-400 via-pink-400 to-purple-400 p-6 rounded-t-3xl">
             <!-- 顶部操作按钮 -->
             <div class="absolute top-4 right-4 flex gap-2">
+              <button v-if="currentRole !== 'student' && !isGuest" @click="openSchedules(detailStudent!)" class="px-3 py-2 bg-white/20 hover:bg-white/30 rounded-full flex items-center gap-1.5 text-white text-sm transition-colors" title="定时日程提醒">
+                <span>📅</span>
+                <span class="font-medium">日程提醒</span>
+              </button>
+              <button v-if="currentRole !== 'student' && !isGuest" @click="openChatLogs(detailStudent!)" class="px-3 py-2 bg-white/20 hover:bg-white/30 rounded-full flex items-center gap-1.5 text-white text-sm transition-colors" title="大模型聊天日志审计">
+                <span>💬</span>
+                <span class="font-medium">对话审计</span>
+              </button>
               <button v-if="currentRole !== 'student' && !isGuest" @click="showDetailPanel = false; openPetSelect(detailStudent!)" class="px-3 py-2 bg-white/20 hover:bg-white/30 rounded-full flex items-center gap-1.5 text-white text-sm transition-colors" title="更换宠物">
                 <span>🐾</span>
                 <span class="font-medium">换宠物</span>
@@ -2337,6 +2450,71 @@ onMounted(async () => {
                         <p class="text-xs text-gray-400 mt-2">例如：设置为 30 分钟，学生申报任务 30 分钟内老师可以手动撤销或修改，超时系统自动确认加分。</p>
                       </div>
                     </Transition>
+
+                    <!-- OpenRouter 大模型配置 -->
+                    <div class="border-t border-gray-100 pt-6">
+                      <label class="block text-gray-700 font-bold mb-2.5">OpenRouter 大模型 API 设置</label>
+                      <div class="flex flex-col gap-4">
+                        <div>
+                          <span class="text-xs text-gray-400 block mb-1.5">API Key (OpenRouter 密钥)</span>
+                          <input 
+                            v-model="openrouterApiKey" 
+                            type="password" 
+                            placeholder="sk-or-v1-..." 
+                            class="w-full border-2 border-gray-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:border-orange-400 transition-colors"
+                          />
+                        </div>
+                        <div>
+                          <span class="text-xs text-gray-400 block mb-1.5">语音助手大模型 (Model Slug)</span>
+                          <input 
+                            v-model="openrouterModel" 
+                            type="text" 
+                            placeholder="openrouter/free" 
+                            class="w-full border-2 border-gray-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:border-orange-400 transition-colors"
+                          />
+                          <p class="text-xs text-gray-400 mt-1 font-medium text-gray-400">可以使用免费模型 <code>openrouter/free</code> 或 <code>google/gemma-4-31b-it:free</code>。配置后即刻生效，无需重启设备。</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <!-- 屏幕与功耗控制设置 -->
+                    <div class="border-t border-gray-100 pt-6">
+                      <label class="block text-gray-700 font-bold mb-2.5">屏幕背光与待机设置</label>
+                      <div class="flex flex-col gap-4">
+                        <div>
+                          <div class="flex justify-between items-center mb-1.5">
+                            <span class="text-xs text-gray-400 block font-bold">屏幕亮度 (Backlight)</span>
+                            <span class="text-xs text-orange-500 font-bold">{{ screenBrightness }}%</span>
+                          </div>
+                          <div class="flex items-center gap-3">
+                            <input 
+                              v-model.number="screenBrightness" 
+                              type="range" 
+                              min="10" 
+                              max="100" 
+                              step="5"
+                              class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-orange-500"
+                            />
+                          </div>
+                          <p class="text-xs text-gray-400 mt-1 font-medium text-gray-400">调节开发板液晶屏的背光亮度，降低亮度可有效减少发热并延长电池续航。</p>
+                        </div>
+                        <div>
+                          <span class="text-xs text-gray-400 block mb-1.5 font-bold">自动熄屏等待时间 (Screen Sleep)</span>
+                          <select 
+                            v-model.number="screenSleepSeconds" 
+                            class="w-full border-2 border-gray-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:border-orange-400 font-bold text-gray-700"
+                          >
+                            <option :value="5">5 秒无动作自动关屏</option>
+                            <option :value="10">10 秒无动作自动关屏</option>
+                            <option :value="15">15 秒无动作自动关屏 (默认)</option>
+                            <option :value="30">30 秒无动作自动关屏</option>
+                            <option :value="60">1 分钟无动作自动关屏</option>
+                            <option :value="0">从不自动熄屏</option>
+                          </select>
+                          <p class="text-xs text-gray-400 mt-1 font-medium text-gray-400">规定无动作后多少秒自动关闭屏幕。触摸屏幕或语音唤醒会重新点亮。</p>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -2487,6 +2665,152 @@ onMounted(async () => {
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- 聊天日志审计模态弹窗 -->
+    <Transition name="modal">
+      <div v-if="showChatLogsModal && auditingStudent" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" @click.self="showChatLogsModal = false">
+        <div class="bg-white rounded-3xl w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col shadow-2xl animate-scale-in">
+          <div class="p-6 bg-gradient-to-r from-orange-400 to-pink-500 text-white flex justify-between items-center">
+            <div>
+              <h3 class="text-xl font-bold">💬 对话历史审计</h3>
+              <p class="text-white/80 text-xs mt-1">学生: {{ auditingStudent.name }} | 展示最近对话记录，自动滚动保留最近 30 天</p>
+            </div>
+            <button @click="showChatLogsModal = false" class="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center text-xl transition-colors">×</button>
+          </div>
+          
+          <div class="flex-1 overflow-auto p-6 bg-gray-50 flex flex-col gap-4">
+            <div v-if="loadingChatLogs" class="flex-1 flex items-center justify-center text-gray-400">
+              <span class="animate-spin text-2xl mr-2">🔄</span> 正在读取对话日志...
+            </div>
+            <div v-else-if="chatLogsList.length === 0" class="flex-1 flex flex-col items-center justify-center text-center py-12 text-gray-400">
+              <span class="text-4xl mb-2">💤</span>
+              <p class="font-bold">暂无对话记录</p>
+              <p class="text-xs text-gray-300 mt-1">当学生使用硬件进行大模型交互时，聊天记录将自动汇总展示在此</p>
+            </div>
+            <div v-else class="flex flex-col gap-4">
+              <div v-for="log in chatLogsList" :key="log.id" class="flex flex-col gap-2">
+                <div class="text-center text-[10px] text-gray-400 my-1 font-bold">
+                  {{ new Date(log.timestamp).toLocaleString() }}
+                </div>
+                <!-- 学生消息 -->
+                <div class="flex justify-end items-start gap-2.5">
+                  <div class="bg-gradient-to-br from-orange-400 to-pink-400 text-white px-4 py-2.5 rounded-2xl rounded-tr-none text-sm max-w-[80%] shadow-sm font-medium">
+                    {{ log.user_message }}
+                  </div>
+                  <div class="w-8 h-8 rounded-full bg-orange-100 flex items-center justify-center text-sm font-bold text-orange-600 flex-shrink-0 shadow-sm">
+                    学
+                  </div>
+                </div>
+                <!-- 宠物/模型回复 -->
+                <div class="flex justify-start items-start gap-2.5">
+                  <div class="w-8 h-8 rounded-full bg-purple-100 flex items-center justify-center text-sm font-bold text-purple-600 flex-shrink-0 shadow-sm">
+                    宠
+                  </div>
+                  <div class="bg-white border border-gray-100 text-gray-800 px-4 py-2.5 rounded-2xl rounded-tl-none text-sm max-w-[80%] shadow-sm leading-relaxed font-medium">
+                    {{ log.ai_response }}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="p-4 border-t border-gray-100 bg-white flex justify-end">
+            <button @click="showChatLogsModal = false" class="px-6 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-bold transition-all text-sm">
+              关闭
+            </button>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
+    <!-- 定时日程提醒模态弹窗 -->
+    <Transition name="modal">
+      <div v-if="showSchedulesModal && schedulingStudent" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4" @click.self="showSchedulesModal = false">
+        <div class="bg-white rounded-3xl w-full max-w-2xl max-h-[85vh] overflow-hidden flex flex-col shadow-2xl animate-scale-in">
+          <div class="p-6 bg-gradient-to-r from-orange-400 to-pink-500 text-white flex justify-between items-center">
+            <div>
+              <h3 class="text-xl font-bold">📅 定时日程提醒管理</h3>
+              <p class="text-white/80 text-xs mt-1">学生: {{ schedulingStudent.name }} | 设置学习闹钟，到点后设备端会自动语音播报</p>
+            </div>
+            <button @click="showSchedulesModal = false" class="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 flex items-center justify-center text-xl transition-colors">×</button>
+          </div>
+          
+          <div class="flex-1 overflow-auto p-6 flex flex-col gap-6 bg-gray-50/50">
+            <!-- 添加日程表单 -->
+            <div class="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+              <h4 class="font-bold text-gray-700 mb-3.5 text-sm flex items-center gap-1.5">
+                <span>➕</span> 新增日程闹钟
+              </h4>
+              <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div>
+                  <span class="text-xs text-gray-400 block mb-1.5 font-bold">重复日期</span>
+                  <select v-model="newScheduleDay" class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:border-orange-400 font-bold text-gray-700">
+                    <option :value="1">每周一</option>
+                    <option :value="2">每周二</option>
+                    <option :value="3">每周三</option>
+                    <option :value="4">每周四</option>
+                    <option :value="5">每周五</option>
+                    <option :value="6">每周六</option>
+                    <option :value="7">每周日</option>
+                  </select>
+                </div>
+                <div>
+                  <span class="text-xs text-gray-400 block mb-1.5 font-bold">提醒时间</span>
+                  <input v-model="newScheduleTime" type="time" class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-orange-400 font-bold text-gray-700" />
+                </div>
+                <div class="sm:col-span-1 flex items-end">
+                  <button @click="addSchedule" class="w-full bg-gradient-to-r from-orange-400 to-pink-500 hover:from-orange-500 hover:to-pink-600 text-white py-2.5 rounded-xl font-bold text-sm shadow-md transition-all">
+                    添加闹钟
+                  </button>
+                </div>
+              </div>
+              <div class="mt-4">
+                <span class="text-xs text-gray-400 block mb-1.5 font-bold">提醒要做的事</span>
+                <input v-model="newScheduleTask" type="text" placeholder="例如：该背英语单词啦，该去浇花啦" class="w-full border border-gray-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:border-orange-400" />
+              </div>
+            </div>
+
+            <!-- 已有日程列表 -->
+            <div class="flex-grow flex flex-col min-h-0">
+              <h4 class="font-bold text-gray-700 mb-3 text-sm flex items-center justify-between">
+                <span>📋 当前日程安排列表</span>
+                <span class="text-xs text-gray-400 font-normal">设备在联网状态下会自动同步这套行程</span>
+              </h4>
+              
+              <div v-if="loadingSchedules" class="py-8 text-center text-gray-400 text-sm">
+                <span class="animate-spin text-lg mr-1.5">🔄</span> 载入日程中...
+              </div>
+              <div v-else-if="schedulesList.length === 0" class="py-12 border-2 border-dashed border-gray-100 rounded-3xl flex flex-col items-center justify-center text-gray-400 text-sm bg-white shadow-sm">
+                <span class="text-3xl mb-1.5">⏰</span>
+                <p class="font-bold">暂无定时提醒</p>
+                <p class="text-xs text-gray-300 mt-1">您也可以对着设备说：“周三早上八点半提醒我交作业”进行语音录入</p>
+              </div>
+              <div v-else class="flex flex-col gap-3">
+                <div v-for="sch in schedulesList" :key="sch.id" class="bg-white border border-gray-100 rounded-2xl p-4 flex items-center justify-between shadow-sm hover:shadow-md transition-shadow">
+                  <div class="flex items-center gap-4">
+                    <div class="w-12 h-12 rounded-xl bg-orange-50 text-orange-600 flex items-center justify-center font-extrabold text-sm flex-shrink-0">
+                      周{{ ['一','二','三','四','五','六','日'][sch.day_of_week - 1] }}
+                    </div>
+                    <div>
+                      <span class="font-bold text-gray-800 text-base mr-2">{{ sch.time_str }}</span>
+                      <span class="text-gray-600 text-sm font-medium">{{ sch.task_desc }}</span>
+                    </div>
+                  </div>
+                  <button @click="deleteSchedule(sch.id)" class="text-red-500 hover:text-red-700 p-2 text-sm font-bold transition-colors">
+                    删除
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <div class="p-6 border-t border-gray-100 bg-white flex justify-end">
+            <button @click="showSchedulesModal = false" class="px-6 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-bold transition-all text-sm">
+              关闭
+            </button>
           </div>
         </div>
       </div>

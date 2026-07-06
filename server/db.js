@@ -75,6 +75,15 @@ export async function initDb() {
       // 忽略已存在字段报错
     }
 
+    // 动态在 PostgreSQL 的 students 表中增加电量及心跳字段
+    try {
+      await pgPool.query("ALTER TABLE students ADD COLUMN IF NOT EXISTS battery_level INTEGER DEFAULT 100")
+      await pgPool.query("ALTER TABLE students ADD COLUMN IF NOT EXISTS is_charging INTEGER DEFAULT 0")
+      await pgPool.query("ALTER TABLE students ADD COLUMN IF NOT EXISTS last_seen BIGINT")
+    } catch (err) {
+      // 忽略已存在字段报错
+    }
+
     // 动态检查并创建 student_task_applications 表
     try {
       await pgPool.query(`
@@ -93,6 +102,40 @@ export async function initDb() {
       console.error("❌ [PostgreSQL] 确保 student_task_applications 表失败:", err.message)
     }
 
+    // 动态检查并创建 chat_logs 表
+    try {
+      await pgPool.query(`
+        CREATE TABLE IF NOT EXISTS chat_logs (
+          id VARCHAR(64) PRIMARY KEY,
+          student_id VARCHAR(64) NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+          user_message TEXT NOT NULL,
+          ai_response TEXT NOT NULL,
+          timestamp BIGINT NOT NULL
+        )
+      `)
+      console.log("📝 [PostgreSQL] 已确保 chat_logs 表存在")
+    } catch (err) {
+      console.error("❌ [PostgreSQL] 确保 chat_logs 表失败:", err.message)
+    }
+
+    // 动态检查并创建 schedules 表
+    try {
+      await pgPool.query(`
+        CREATE TABLE IF NOT EXISTS schedules (
+          id VARCHAR(64) PRIMARY KEY,
+          student_id VARCHAR(64) NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+          day_of_week INTEGER NOT NULL,
+          time_str VARCHAR(16) NOT NULL,
+          task_desc TEXT NOT NULL,
+          is_active INTEGER DEFAULT 1,
+          created_at BIGINT NOT NULL
+        )
+      `)
+      console.log("📝 [PostgreSQL] 已确保 schedules 表存在")
+    } catch (err) {
+      console.error("❌ [PostgreSQL] 确保 schedules 表失败:", err.message)
+    }
+
     // 初始化任务及系统配置
     try {
       await runAsync("INSERT INTO settings (key, value) VALUES ('task_confirm_mode', $1) ON CONFLICT (key) DO NOTHING", JSON.stringify('auto'))
@@ -102,6 +145,10 @@ export async function initDb() {
       await runAsync("INSERT INTO settings (key, value) VALUES ('firmware_checksum', $1) ON CONFLICT (key) DO NOTHING", JSON.stringify('dummy_checksum_sha256'))
       await runAsync("INSERT INTO settings (key, value) VALUES ('teacher_invite_code', $1) ON CONFLICT (key) DO NOTHING", JSON.stringify('TEACHER_INVITE'))
       await runAsync("INSERT INTO settings (key, value) VALUES ('levelConfig', $1) ON CONFLICT (key) DO NOTHING", JSON.stringify([40, 60, 80, 100, 120, 140, 160]))
+      await runAsync("INSERT INTO settings (key, value) VALUES ('openrouter_api_key', $1) ON CONFLICT (key) DO NOTHING", JSON.stringify(''))
+      await runAsync("INSERT INTO settings (key, value) VALUES ('openrouter_model', $1) ON CONFLICT (key) DO NOTHING", JSON.stringify('openrouter/free'))
+      await runAsync("INSERT INTO settings (key, value) VALUES ('screen_brightness', $1) ON CONFLICT (key) DO NOTHING", JSON.stringify(80))
+      await runAsync("INSERT INTO settings (key, value) VALUES ('screen_sleep_seconds', $1) ON CONFLICT (key) DO NOTHING", JSON.stringify(15))
     } catch (err) {
       console.error("❌ [PostgreSQL] 初始化系统设置失败:", err.message)
     }
@@ -224,6 +271,26 @@ export async function initDb() {
         created_at INTEGER NOT NULL,
         FOREIGN KEY (student_id) REFERENCES students(id)
       );
+      -- 对话历史审计表
+      CREATE TABLE IF NOT EXISTS chat_logs (
+        id TEXT PRIMARY KEY,
+        student_id TEXT NOT NULL,
+        user_message TEXT NOT NULL,
+        ai_response TEXT NOT NULL,
+        timestamp INTEGER NOT NULL,
+        FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE
+      );
+      -- 定时日程提醒表
+      CREATE TABLE IF NOT EXISTS schedules (
+        id TEXT PRIMARY KEY,
+        student_id TEXT NOT NULL,
+        day_of_week INTEGER NOT NULL,
+        time_str TEXT NOT NULL,
+        task_desc TEXT NOT NULL,
+        is_active INTEGER DEFAULT 1,
+        created_at INTEGER NOT NULL,
+        FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE
+      );
 
     `)
 
@@ -238,6 +305,26 @@ export async function initDb() {
       }
     } catch (err) {
       console.error("❌ 检查或添加 device_id 字段失败:", err)
+    }
+
+    // 动态为 SQLite 的 students 表添加电量及心跳字段
+    try {
+      const tableInfo = db.prepare("PRAGMA table_info(students)").all()
+      const hasBattery = tableInfo.some(col => col.name === 'battery_level')
+      if (!hasBattery) {
+        db.exec("ALTER TABLE students ADD COLUMN battery_level INTEGER DEFAULT 100")
+      }
+      const hasCharging = tableInfo.some(col => col.name === 'is_charging')
+      if (!hasCharging) {
+        db.exec("ALTER TABLE students ADD COLUMN is_charging INTEGER DEFAULT 0")
+      }
+      const hasLastSeen = tableInfo.some(col => col.name === 'last_seen')
+      if (!hasLastSeen) {
+        db.exec("ALTER TABLE students ADD COLUMN last_seen INTEGER")
+        console.log("🔋 动态为 SQLite 的 students 表添加了电量及心跳字段")
+      }
+    } catch (err) {
+      console.error("❌ 动态添加电量心跳字段失败:", err)
     }
 
     // 动态检查并添加 users 的 role 字段
@@ -277,6 +364,22 @@ export async function initDb() {
       const inviteCode = db.prepare("SELECT value FROM settings WHERE key = 'teacher_invite_code'").get()
       if (!inviteCode) {
         db.prepare("INSERT INTO settings (key, value) VALUES ('teacher_invite_code', ?)").run(JSON.stringify('TEACHER_INVITE'))
+      }
+      const orKey = db.prepare("SELECT value FROM settings WHERE key = 'openrouter_api_key'").get()
+      if (!orKey) {
+        db.prepare("INSERT INTO settings (key, value) VALUES ('openrouter_api_key', ?)").run(JSON.stringify(''))
+      }
+      const orModel = db.prepare("SELECT value FROM settings WHERE key = 'openrouter_model'").get()
+      if (!orModel) {
+        db.prepare("INSERT INTO settings (key, value) VALUES ('openrouter_model', ?)").run(JSON.stringify('openrouter/free'))
+      }
+      const screenBrightness = db.prepare("SELECT value FROM settings WHERE key = 'screen_brightness'").get()
+      if (!screenBrightness) {
+        db.prepare("INSERT INTO settings (key, value) VALUES ('screen_brightness', ?)").run(JSON.stringify(80))
+      }
+      const screenSleepSeconds = db.prepare("SELECT value FROM settings WHERE key = 'screen_sleep_seconds'").get()
+      if (!screenSleepSeconds) {
+        db.prepare("INSERT INTO settings (key, value) VALUES ('screen_sleep_seconds', ?)").run(JSON.stringify(15))
       }
     } catch (err) {
       console.error("❌ 初始化任务设置失败:", err)

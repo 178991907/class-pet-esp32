@@ -19,6 +19,9 @@ export interface Student {
   pet_level: number
   pet_exp: number
   created_at?: number
+  battery_level?: number | null
+  is_charging?: number | null
+  last_seen?: number | null
 }
 
 // 评价规则

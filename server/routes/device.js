@@ -3,8 +3,10 @@ import { v4 as uuidv4 } from 'uuid'
 import crypto from 'crypto'
 import { getAsync, allAsync, runAsync } from '../db.js'
 import { calculateLevel } from '../utils/level.js'
+import { authMiddleware } from '../middleware/auth.js'
 
 const router = Router()
+const lastVoiceRequestTimes = new Map()
 
 // ================= 安全防重放中间件 =================
 
@@ -205,15 +207,28 @@ function getLevelProgress(exp) {
 // 通用语音接收与智能核销路由
 router.post('/voice', deviceAuthMiddleware, async (req, res) => {
   let { text } = req.body // 支持直接传递文字 text 调试降级
+  const deviceId = req.deviceId
 
   try {
+    // 限频检查：5秒防刷
+    const now = Date.now()
+    const lastTime = lastVoiceRequestTimes.get(deviceId) || 0
+    if (now - lastTime < 5000) {
+      return res.json({
+        action: 'none',
+        text: text,
+        reply_text: '歇一会儿再聊哦，不要太频繁啦。'
+      })
+    }
+    lastVoiceRequestTimes.set(deviceId, now)
+
     // 获取绑定设备的学生
     const student = await getAsync(`
       SELECT s.*, c.user_id
       FROM students s
       JOIN classes c ON s.class_id = c.id
       WHERE s.device_id = ?
-    `, req.deviceId)
+    `, deviceId)
 
     if (!student) {
       return res.status(403).json({ error: '设备尚未绑定学生，无法执行操作' })
@@ -221,24 +236,15 @@ router.post('/voice', deviceAuthMiddleware, async (req, res) => {
 
     // ASR 语音合成在未配置 ASR Key 时的测试降级：必须包含文本
     if (!text) {
-      // 在此可接入 Whisper 或腾讯/阿里 ASR 音频流转文字，无 Key 时直接拦截并提示
       return res.status(400).json({ error: 'ASR 未配置，请直接使用 text 属性进行调试输入。' })
     }
 
-    // 规则匹配降级分类引擎 (未配置大模型 API Key 时的备选方案)
-    const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY
     let nlpResult = null
-
-    if (OPENROUTER_KEY) {
-      // 接入 OpenRouter 大模型分类意图
-      try {
-        nlpResult = await askLLMIntent(text)
-      } catch (err) {
-        console.warn('⚠️ 大模型 API 调用失败，自动降级为内置正则分类器:', err.message)
-      }
-    }
-
-    if (!nlpResult) {
+    // 优先调用大模型，失败后自动退化为内置正则提取器
+    try {
+      nlpResult = await askLLMIntent(text)
+    } catch (err) {
+      console.warn('⚠️ 大模型 API 调用失败，自动降级为内置正则分类器:', err.message)
       nlpResult = regexClassifyIntent(text)
     }
 
@@ -264,7 +270,6 @@ router.post('/voice', deviceAuthMiddleware, async (req, res) => {
 
       // 生成任务申报记录存库
       const taskId = uuidv4()
-      const now = Date.now()
 
       // 从 settings 读取当前延时时长
       const delayRow = await getAsync("SELECT value FROM settings WHERE key = 'task_confirm_delay'")
@@ -276,13 +281,49 @@ router.post('/voice', deviceAuthMiddleware, async (req, res) => {
         VALUES (?, ?, ?, ?, 'pending', ?, ?)
       `, taskId, student.id, taskName, points, autoConfirmAt, now)
 
-      responseData.reply_text = `已为您申报了“${taskName}”，价值${points}分。请等待老师审核确认。`
+      responseData.reply_text = nlpResult.reply_text || `已为您申报了“${taskName}”，价值${points}分。请等待老师审核确认。`
       responseData.task_id = taskId
       responseData.points = points
     } else if (nlpResult.action === 'query_status') {
       const latestStudent = await getAsync('SELECT * FROM students WHERE id = ?', student.id)
-      responseData.reply_text = `你当前的积分总计 ${latestStudent.total_points} 分，宠物当前处于等级 ${latestStudent.pet_level}。加油！`
+      responseData.reply_text = nlpResult.reply_text || `你当前的积分总计 ${latestStudent.total_points} 分，宠物当前处于等级 ${latestStudent.pet_level}。加油！`
+    } else if (nlpResult.action === 'create_schedule') {
+      const info = nlpResult.schedule_info
+      if (info && Array.isArray(info.days) && info.time && info.task_desc) {
+        for (const day of info.days) {
+          const scheduleId = uuidv4()
+          await runAsync(
+            'INSERT INTO schedules (id, student_id, day_of_week, time_str, task_desc, is_active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)',
+            scheduleId,
+            student.id,
+            day,
+            info.time,
+            info.task_desc,
+            now
+          )
+        }
+        responseData.reply_text = nlpResult.reply_text || `已为您安排在周${info.days.join('、')}的 ${info.time} 提醒：${info.task_desc}。`
+      } else {
+        responseData.reply_text = '抱歉，我未能听清您要设定的日程时间和任务，请重试。'
+      }
     }
+
+    // 自动将本次有效交互记入 chat_logs 数据库
+    const logId = uuidv4()
+    await runAsync(
+      'INSERT INTO chat_logs (id, student_id, user_message, ai_response, timestamp) VALUES (?, ?, ?, ?, ?)',
+      logId,
+      student.id,
+      text,
+      responseData.reply_text,
+      now
+    )
+
+    // 异步自动清理 30 天前的聊天审计记录 (30 天 = 30 * 24 * 3600 * 1000 = 2592000000 毫秒)
+    const thirtyDaysAgo = now - 2592000000
+    runAsync('DELETE FROM chat_logs WHERE timestamp < ?', thirtyDaysAgo).catch(err => {
+      console.error('自动清理历史对话记录失败:', err)
+    })
 
     res.json(responseData)
   } catch (error) {
@@ -323,9 +364,80 @@ function regexClassifyIntent(text) {
 
 // 真实大模型 API 交互
 async function askLLMIntent(text) {
-  // 此处可以使用 axios 调用 OpenRouter 接口将文本翻译并返回标准 JSON
-  // 由于没有配置真实 API，这里直接抛错以触发降级正则
-  throw new Error('LLM API Key not provided')
+  const keyRow = await getAsync("SELECT value FROM settings WHERE key = 'openrouter_api_key'")
+  const modelRow = await getAsync("SELECT value FROM settings WHERE key = 'openrouter_model'")
+
+  let apiKey = keyRow ? JSON.parse(keyRow.value) : ''
+  let model = modelRow ? JSON.parse(modelRow.value) : 'openrouter/free'
+
+  if (!apiKey) {
+    apiKey = process.env.OPENROUTER_API_KEY || ''
+  }
+
+  if (!apiKey) {
+    throw new Error('OpenRouter API Key not provided in settings or env')
+  }
+
+  const systemPrompt = `你是一个智能班级助手意图分类器。你需要将用户的语音输入分类，并以标准的 JSON 格式输出，不要包含任何 markdown 标记（如 \`\`\`json）或多余解释。
+JSON 输出格式：
+{
+  "action": "apply_task" | "query_status" | "create_schedule" | "none",
+  "task_name": "申报任务名称，如'认真打扫卫生'（仅在 action 为 apply_task 时需要，去除'我完成了'等废话前缀）",
+  "schedule_info": {
+    "days": [1, 2, 3, 4, 5, 6, 7], // 仅在 action 为 create_schedule 时需要。用数字数组表示周几，1为周一，7为周日，如果是每天则为 [1,2,3,4,5,6,7]
+    "time": "HH:MM", // 仅在 action 为 create_schedule 时需要。24小时制，如 '08:30'，如果语音没提具体时间，默认为当前时间 '08:00'
+    "task_desc": "日程提醒的内容，如 '背英语单词'"
+  },
+  "reply_text": "给学生的口语化鼓励或确认回复，字数控制在 25 字以内（适合设备语音播放，如：已为您安排好了日程）"
+}
+
+意图分类规则：
+1. 申请加分/申报完成了某件事，如“我扫地了”、“完成作业了”，action 为 apply_task。
+2. 查询宠物等级/几分/经验，如“我多少分了”、“我几级了”，action 为 query_status。
+3. 设定日程提醒，如“周三下午两点半提醒我背单词”、“每天早上八点叫我起床”，action 为 create_schedule。
+4. 其它无法识别或无意义的内容，action 为 none，reply_text 可作简短闲聊回复。`;
+
+  try {
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://github.com/class-pet-garden',
+        'X-Title': 'ClassPetGarden'
+      },
+      body: JSON.stringify({
+        model: model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: text }
+        ],
+        temperature: 0.1
+      })
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      throw new Error(`OpenRouter API response error: ${response.status} - ${errorText}`)
+    }
+
+    const data = await response.json()
+    const content = data.choices?.[0]?.message?.content?.trim()
+    if (!content) {
+      throw new Error('Empty response from OpenRouter')
+    }
+
+    let cleanJson = content
+    if (cleanJson.startsWith('```')) {
+      cleanJson = cleanJson.replace(/^```json\s*/i, '').replace(/```$/, '').trim()
+    }
+
+    const parsed = JSON.parse(cleanJson)
+    return parsed
+  } catch (err) {
+    console.error('askLLMIntent 异常:', err)
+    throw err
+  }
 }
 
 
@@ -378,6 +490,197 @@ router.get('/firmware-version', deviceAuthMiddleware, async (req, res) => {
   } catch (error) {
     console.error('获取固件版本失败:', error)
     res.status(500).json({ error: '获取固件版本接口异常' })
+  }
+})
+
+// 1. 教师获取某个学生的全部日程
+router.get('/schedules/student/:studentId', authMiddleware, async (req, res) => {
+  try {
+    const schedules = await allAsync(
+      'SELECT * FROM schedules WHERE student_id = ? ORDER BY day_of_week ASC, time_str ASC',
+      req.params.studentId
+    )
+    res.json({ success: true, schedules })
+  } catch (error) {
+    console.error('获取日程失败:', error)
+    res.status(500).json({ error: '获取日程失败' })
+  }
+})
+
+// 2. 教师为某个学生添加日程
+router.post('/schedules/student/:studentId', authMiddleware, async (req, res) => {
+  const { day_of_week, time_str, task_desc } = req.body
+  if (!day_of_week || !time_str || !task_desc) {
+    return res.status(400).json({ error: '参数缺失' })
+  }
+  try {
+    const scheduleId = uuidv4()
+    await runAsync(
+      'INSERT INTO schedules (id, student_id, day_of_week, time_str, task_desc, is_active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)',
+      scheduleId,
+      req.params.studentId,
+      day_of_week,
+      time_str,
+      task_desc,
+      Date.now()
+    )
+    res.json({ success: true, id: scheduleId })
+  } catch (error) {
+    console.error('添加日程失败:', error)
+    res.status(500).json({ error: '添加日程失败' })
+  }
+})
+
+// 3. 教师删除单条日程
+router.delete('/schedules/:id', authMiddleware, async (req, res) => {
+  try {
+    await runAsync('DELETE FROM schedules WHERE id = ?', req.params.id)
+    res.json({ success: true })
+  } catch (error) {
+    console.error('删除日程失败:', error)
+    res.status(500).json({ error: '删除日程失败' })
+  }
+})
+
+// 4. 教师获取某个学生的聊天历史纪录
+router.get('/chat-logs/student/:studentId', authMiddleware, async (req, res) => {
+  try {
+    const logs = await allAsync(
+      'SELECT * FROM chat_logs WHERE student_id = ? ORDER BY timestamp DESC LIMIT 200',
+      req.params.studentId
+    )
+    res.json({ success: true, logs })
+  } catch (error) {
+    console.error('获取对话记录失败:', error)
+    res.status(500).json({ error: '获取对话记录失败' })
+  }
+})
+
+// 5. 设备端获取自身绑定的学生的定时日程表
+router.get('/schedules', deviceAuthMiddleware, async (req, res) => {
+  try {
+    const student = await getAsync('SELECT id FROM students WHERE device_id = ?', req.deviceId)
+    if (!student) {
+      return res.json({ status: 'unbound', schedules: [] })
+    }
+    // 自动更新 last_seen 心跳时间
+    await runAsync('UPDATE students SET last_seen = ? WHERE id = ?', Date.now(), student.id)
+
+    const schedules = await allAsync(
+      'SELECT id, day_of_week, time_str, task_desc, is_active FROM schedules WHERE student_id = ? AND is_active = 1',
+      student.id
+    )
+    res.json({ status: 'ok', schedules })
+  } catch (error) {
+    console.error('设备获取日程表失败:', error)
+    res.status(500).json({ error: '服务器内部错误' })
+  }
+})
+
+// 6. 教师获取系统设置
+router.get('/settings', authMiddleware, async (req, res) => {
+  try {
+    const modeRow = await getAsync("SELECT value FROM settings WHERE key = 'task_confirm_mode'")
+    const delayRow = await getAsync("SELECT value FROM settings WHERE key = 'task_confirm_delay'")
+    const keyRow = await getAsync("SELECT value FROM settings WHERE key = 'openrouter_api_key'")
+    const modelRow = await getAsync("SELECT value FROM settings WHERE key = 'openrouter_model'")
+    const brightnessRow = await getAsync("SELECT value FROM settings WHERE key = 'screen_brightness'")
+    const sleepSecsRow = await getAsync("SELECT value FROM settings WHERE key = 'screen_sleep_seconds'")
+
+    res.json({
+      task_confirm_mode: modeRow ? JSON.parse(modeRow.value) : 'auto',
+      task_confirm_delay: delayRow ? JSON.parse(delayRow.value) : 30,
+      openrouter_api_key: keyRow ? JSON.parse(keyRow.value) : '',
+      openrouter_model: modelRow ? JSON.parse(modelRow.value) : 'openrouter/free',
+      screen_brightness: brightnessRow ? JSON.parse(brightnessRow.value) : 80,
+      screen_sleep_seconds: sleepSecsRow ? JSON.parse(sleepSecsRow.value) : 15
+    })
+  } catch (error) {
+    console.error('获取系统设置失败:', error)
+    res.status(500).json({ error: '获取系统设置失败' })
+  }
+})
+
+// 7. 教师保存系统设置
+router.post('/settings', authMiddleware, async (req, res) => {
+  const { task_confirm_mode, task_confirm_delay, openrouter_api_key, openrouter_model, screen_brightness, screen_sleep_seconds } = req.body
+  try {
+    if (task_confirm_mode !== undefined) {
+      const existing = await getAsync("SELECT key FROM settings WHERE key = 'task_confirm_mode'")
+      if (existing) {
+        await runAsync("UPDATE settings SET value = ? WHERE key = 'task_confirm_mode'", JSON.stringify(task_confirm_mode))
+      } else {
+        await runAsync("INSERT INTO settings (key, value) VALUES ('task_confirm_mode', ?)", JSON.stringify(task_confirm_mode))
+      }
+    }
+    if (task_confirm_delay !== undefined) {
+      const existing = await getAsync("SELECT key FROM settings WHERE key = 'task_confirm_delay'")
+      if (existing) {
+        await runAsync("UPDATE settings SET value = ? WHERE key = 'task_confirm_delay'", JSON.stringify(task_confirm_delay))
+      } else {
+        await runAsync("INSERT INTO settings (key, value) VALUES ('task_confirm_delay', ?)", JSON.stringify(task_confirm_delay))
+      }
+    }
+    if (openrouter_api_key !== undefined) {
+      const existing = await getAsync("SELECT key FROM settings WHERE key = 'openrouter_api_key'")
+      if (existing) {
+        await runAsync("UPDATE settings SET value = ? WHERE key = 'openrouter_api_key'", JSON.stringify(openrouter_api_key))
+      } else {
+        await runAsync("INSERT INTO settings (key, value) VALUES ('openrouter_api_key', ?)", JSON.stringify(openrouter_api_key))
+      }
+    }
+    if (openrouter_model !== undefined) {
+      const existing = await getAsync("SELECT key FROM settings WHERE key = 'openrouter_model'")
+      if (existing) {
+        await runAsync("UPDATE settings SET value = ? WHERE key = 'openrouter_model'", JSON.stringify(openrouter_model))
+      } else {
+        await runAsync("INSERT INTO settings (key, value) VALUES ('openrouter_model', ?)", JSON.stringify(openrouter_model))
+      }
+    }
+    if (screen_brightness !== undefined) {
+      const existing = await getAsync("SELECT key FROM settings WHERE key = 'screen_brightness'")
+      if (existing) {
+        await runAsync("UPDATE settings SET value = ? WHERE key = 'screen_brightness'", JSON.stringify(Number(screen_brightness)))
+      } else {
+        await runAsync("INSERT INTO settings (key, value) VALUES ('screen_brightness', ?)", JSON.stringify(Number(screen_brightness)))
+      }
+    }
+    if (screen_sleep_seconds !== undefined) {
+      const existing = await getAsync("SELECT key FROM settings WHERE key = 'screen_sleep_seconds'")
+      if (existing) {
+        await runAsync("UPDATE settings SET value = ? WHERE key = 'screen_sleep_seconds'", JSON.stringify(Number(screen_sleep_seconds)))
+      } else {
+        await runAsync("INSERT INTO settings (key, value) VALUES ('screen_sleep_seconds', ?)", JSON.stringify(Number(screen_sleep_seconds)))
+      }
+    }
+    res.json({ success: true })
+  } catch (error) {
+    console.error('更新系统设置失败:', error)
+    res.status(500).json({ error: '保存系统设置失败' })
+  }
+})
+
+// 8. 设备端心跳与电量状态上报接口
+router.post('/heartbeat', deviceAuthMiddleware, async (req, res) => {
+  const { battery_level, is_charging } = req.body
+  const deviceId = req.deviceId
+  try {
+    const student = await getAsync('SELECT id FROM students WHERE device_id = ?', deviceId)
+    if (!student) {
+      return res.status(404).json({ error: '未找到绑定该设备的学生' })
+    }
+    
+    // 更新电量、充电状态和心跳活跃时间
+    await runAsync(`
+      UPDATE students 
+      SET battery_level = ?, is_charging = ?, last_seen = ? 
+      WHERE id = ?
+    `, battery_level ?? 100, is_charging ? 1 : 0, Date.now(), student.id)
+    
+    res.json({ success: true, timestamp: Date.now() })
+  } catch (error) {
+    console.error('设备心跳上报失败:', error)
+    res.status(500).json({ error: '服务器内部错误' })
   }
 })
 

@@ -54,5 +54,25 @@ router.get('/ranking/:classId', authMiddleware, async (req, res) => {
   }
 })
 
+// 保存设置
+router.post('/', authMiddleware, async (req, res) => {
+  try {
+    const settings = req.body
+    for (const [key, val] of Object.entries(settings)) {
+      const jsonVal = JSON.stringify(val)
+      const existing = await getAsync('SELECT key FROM settings WHERE key = ?', key)
+      if (existing) {
+        await runAsync('UPDATE settings SET value = ? WHERE key = ?', jsonVal, key)
+      } else {
+        await runAsync('INSERT INTO settings (key, value) VALUES (?, ?)', key, jsonVal)
+      }
+    }
+    res.json({ success: true })
+  } catch (error) {
+    console.error('更新系统设置失败:', error)
+    res.status(500).json({ error: '保存系统设置失败' })
+  }
+})
+
 export default router
 
