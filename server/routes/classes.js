@@ -69,6 +69,23 @@ router.delete('/:id', authMiddleware, async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: '删除班级失败' })
   }
+// 获取班级学生列表
+router.get('/:classId/students', authMiddleware, async (req, res) => {
+  try {
+    const classInfo = await getAsync('SELECT user_id FROM classes WHERE id = ?', req.params.classId)
+
+    if (!classInfo) {
+      return res.status(404).json({ error: '班级不存在' })
+    }
+    if (classInfo.user_id !== req.userId) {
+      return res.status(403).json({ error: '无权访问此班级' })
+    }
+
+    const students = await allAsync('SELECT * FROM students WHERE class_id = ? ORDER BY name', req.params.classId)
+    res.json({ students })
+  } catch (error) {
+    res.status(500).json({ error: '获取学生列表失败' })
+  }
 })
 
 export default router

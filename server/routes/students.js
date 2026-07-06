@@ -26,15 +26,7 @@ async function verifyClassOwnership(req, res, next) {
   }
 }
 
-// 获取班级学生列表
-router.get('/classes/:classId/students', authMiddleware, verifyClassOwnership, async (req, res) => {
-  try {
-    const students = await allAsync('SELECT * FROM students WHERE class_id = ? ORDER BY name', req.params.classId)
-    res.json({ students })
-  } catch (error) {
-    res.status(500).json({ error: '获取学生列表失败' })
-  }
-})
+
 
 // 添加学生
 router.post('/', authMiddleware, async (req, res) => {
