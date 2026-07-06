@@ -142,18 +142,7 @@ app.get('/api/reset-db', async (req, res) => {
   }
 })
 
-// 临时数据库自检调试接口
-app.get('/api/db-test', async (req, res) => {
-  try {
-    const students = await allAsync('SELECT * FROM students')
-    const classes = await allAsync('SELECT * FROM classes')
-    const users = await allAsync('SELECT * FROM users')
-    const settings = await allAsync('SELECT * FROM settings')
-    res.json({ success: true, students, classes, users, settings })
-  } catch (err) {
-    res.status(500).json({ success: false, error: err.message })
-  }
-})
+
 
 // 初始化默认评价规则
 async function initDefaultRules() {
