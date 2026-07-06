@@ -133,7 +133,7 @@ router.get('/status', deviceAuthMiddleware, async (req, res) => {
       SELECT s.*, c.name as class_name, c.user_id
       FROM students s
       JOIN classes c ON s.class_id = c.id
-      WHERE s.device_id = ?
+      WHERE UPPER(s.device_id) = UPPER(?)
     `, deviceId)
 
     if (!student) {
@@ -228,7 +228,7 @@ router.post('/voice', deviceAuthMiddleware, async (req, res) => {
       SELECT s.*, c.user_id
       FROM students s
       JOIN classes c ON s.class_id = c.id
-      WHERE s.device_id = ?
+      WHERE UPPER(s.device_id) = UPPER(?)
     `, deviceId)
 
     if (!student) {
@@ -563,7 +563,7 @@ router.get('/chat-logs/student/:studentId', authMiddleware, async (req, res) => 
 // 5. 设备端获取自身绑定的学生的定时日程表
 router.get('/schedules', deviceAuthMiddleware, async (req, res) => {
   try {
-    const student = await getAsync('SELECT id FROM students WHERE device_id = ?', req.deviceId)
+    const student = await getAsync('SELECT id FROM students WHERE UPPER(device_id) = UPPER(?)', req.deviceId)
     if (!student) {
       unboundDevices.set(req.deviceId, Date.now())
       return res.json({ status: 'unbound', schedules: [] })
@@ -672,7 +672,7 @@ router.post('/heartbeat', deviceAuthMiddleware, async (req, res) => {
   const { battery_level, is_charging } = req.body
   const deviceId = req.deviceId
   try {
-    const student = await getAsync('SELECT id FROM students WHERE device_id = ?', deviceId)
+    const student = await getAsync('SELECT id FROM students WHERE UPPER(device_id) = UPPER(?)', deviceId)
     if (!student) {
       unboundDevices.set(deviceId, Date.now())
       return res.json({ status: 'unbound', error: '未找到绑定该设备的学生' })
