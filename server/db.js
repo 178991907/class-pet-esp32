@@ -156,18 +156,17 @@ export async function initDb() {
     // 初始化默认管理员用户
     try {
       const adminRes = await pgPool.query("SELECT id, role FROM users WHERE username = 'admin'")
+      const adminPwdHash = hashPassword('admin')
       if (adminRes.rowCount === 0) {
         const adminId = 'admin-default-id'
-        const adminPwdHash = hashPassword('admin123')
         await pgPool.query(
           "INSERT INTO users (id, username, password_hash, is_guest, role, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
           [adminId, 'admin', adminPwdHash, 0, 'admin', Date.now()]
         )
-        console.log("👑 [PostgreSQL] 已自动预置默认管理员账户: admin / admin123")
-      } else if (adminRes.rows[0].role !== 'admin') {
-        const adminPwdHash = hashPassword('admin123')
+        console.log("👑 [PostgreSQL] 已自动预置默认管理员账户: admin / admin")
+      } else {
         await pgPool.query("UPDATE users SET role = 'admin', password_hash = $1 WHERE username = 'admin'", [adminPwdHash])
-        console.log("👑 [PostgreSQL] 已重置预置管理员账户的 role 为 admin 并强制密码重设为 admin123")
+        console.log("👑 [PostgreSQL] 已强制同步管理员账户密码为: admin / admin")
       }
     } catch (err) {
       console.error("❌ [PostgreSQL] 初始化管理员账号失败:", err.message)
@@ -388,16 +387,15 @@ export async function initDb() {
     // 初始化默认管理员用户
     try {
       const adminUser = db.prepare("SELECT id, role FROM users WHERE username = 'admin'").get()
+      const adminPwdHash = hashPassword('admin')
       if (!adminUser) {
         const adminId = 'admin-default-id'
-        const adminPwdHash = hashPassword('admin123')
         db.prepare("INSERT INTO users (id, username, password_hash, is_guest, role, created_at) VALUES (?, ?, ?, ?, ?, ?)")
           .run(adminId, 'admin', adminPwdHash, 0, 'admin', Date.now())
-        console.log("👑 [ClassPetGarden] 已自动预置默认管理员账户: admin / admin123")
-      } else if (adminUser.role !== 'admin') {
-        const adminPwdHash = hashPassword('admin123')
+        console.log("👑 [ClassPetGarden] 已自动预置默认管理员账户: admin / admin")
+      } else {
         db.prepare("UPDATE users SET role = 'admin', password_hash = ? WHERE username = 'admin'").run(adminPwdHash)
-        console.log("👑 [ClassPetGarden] 已重置预置管理员账户的 role 为 admin 并强制将密码重设为 admin123")
+        console.log("👑 [ClassPetGarden] 已强制同步管理员账户密码为: admin / admin")
       }
     } catch (err) {
       console.error("❌ 初始化管理员账号失败:", err)
