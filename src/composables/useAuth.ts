@@ -25,9 +25,10 @@ if (!cloudUrl) {
 }
 
 // 创建带认证的 axios 实例（单例）
+const isLocalhost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
 const api = axios.create({
   baseURL: cloudUrl || '/pet-garden/api',
-  adapter: cloudUrl ? undefined : localApiAdapter
+  adapter: (cloudUrl || !isLocalhost) ? undefined : localApiAdapter
 })
 
 // 请求拦截器：自动添加 Authorization header
