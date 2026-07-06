@@ -84,6 +84,64 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: Date.now() })
 })
 
+// 一键强制初始化/重置数据库接口（公开，供用户自用）
+app.get('/api/reset-db', async (req, res) => {
+  try {
+    console.log("🧹 [数据库] 开始执行全局一键数据库清空重置...")
+    
+    // 兼容 SQLite 和 PostgreSQL 的多表级联删除顺序
+    const tables = [
+      'student_task_applications',
+      'chat_logs',
+      'schedules',
+      'evaluation_records',
+      'evaluation_rules',
+      'badges',
+      'students',
+      'classes',
+      'users',
+      'settings'
+    ]
+    
+    for (const table of tables) {
+      try {
+        await runAsync(`DROP TABLE IF EXISTS ${table} CASCADE`)
+      } catch (err) {
+        // 忽略可能在 SQLite 中不支持 CASCADE 的报错，尝试常规删除
+        await runAsync(`DROP TABLE IF EXISTS ${table}`)
+      }
+    }
+    
+    console.log("✅ [数据库] 所有老表已安全 DROP。正在重新执行 initDb 初始化...")
+    await initDb()
+    
+    // 强制触发一次默认规则和等级初始化 (由于前面 DROP 了)
+    try {
+      const rulesCount = await getAsync('SELECT COUNT(*) as count FROM evaluation_rules')
+      if (rulesCount && rulesCount.count === 0) {
+        await initDefaultRules()
+      }
+      const levelConfig = await getAsync("SELECT value FROM settings WHERE key = 'levelConfig'")
+      if (!levelConfig) {
+        await runAsync(
+          "INSERT INTO settings (key, value) VALUES ('levelConfig', ?)",
+          JSON.stringify([40, 60, 80, 100, 120, 140, 160])
+        )
+      }
+    } catch (e) {
+      console.warn("⚠️ 辅助重置默认值提示:", e.message)
+    }
+
+    res.json({
+      success: true,
+      message: "数据库已成功重置！所有的旧表已清空并重新创建，默认管理员账号 admin / admin 已重置并就绪。"
+    })
+  } catch (error) {
+    console.error("❌ 数据库重置失败:", error)
+    res.status(500).json({ success: false, error: error.message })
+  }
+})
+
 // 初始化默认评价规则
 async function initDefaultRules() {
   const defaultRules = [
