@@ -710,5 +710,109 @@ router.get('/unbound-devices', authMiddleware, async (req, res) => {
   res.json({ success: true, devices: list })
 })
 
+// 10. 获取待审核任务申报列表 (教师权限)
+router.get('/tasks', authMiddleware, async (req, res) => {
+  try {
+    const status = req.query.status || ''
+    const tasks = await allAsync(`
+      SELECT ta.*, s.name as student_name, c.name as class_name
+      FROM student_task_applications ta
+      JOIN students s ON ta.student_id = s.id
+      JOIN classes c ON s.class_id = c.id
+      WHERE c.user_id = ? AND (? = '' OR ta.status = ?)
+      ORDER BY ta.created_at DESC
+    `, req.userId, status, status)
+    res.json({ success: true, tasks })
+  } catch (error) {
+    console.error('获取申报任务列表失败:', error)
+    res.status(500).json({ error: '获取申报任务列表失败' })
+  }
+})
+
+// 11. 审核同意任务申报 (教师权限)
+router.post('/tasks/:id/approve', authMiddleware, async (req, res) => {
+  try {
+    const task = await getAsync(`
+      SELECT ta.*, s.class_id, s.name as student_name
+      FROM student_task_applications ta
+      JOIN students s ON ta.student_id = s.id
+      JOIN classes c ON s.class_id = c.id
+      WHERE ta.id = ? AND c.user_id = ?
+    `, req.params.id, req.userId)
+
+    if (!task) {
+      return res.status(404).json({ error: '任务申报不存在或无权审核' })
+    }
+
+    if (task.status !== 'pending') {
+      return res.status(400).json({ error: '该申请已被审核处理' })
+    }
+
+    const now = Date.now()
+    // a. 更新申请状态为已通过
+    await runAsync("UPDATE student_task_applications SET status = 'approved' WHERE id = ?", req.params.id)
+
+    // b. 创建对应的评分记录
+    const evalId = uuidv4()
+    await runAsync(
+      'INSERT INTO evaluation_records (id, class_id, student_id, points, reason, category, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      evalId,
+      task.class_id,
+      task.student_id,
+      task.points,
+      `加分申请核销: ${task.task_name}`,
+      '学习',
+      now
+    )
+
+    // c. 累加学生积分并更新宠物等级
+    await runAsync('UPDATE students SET total_points = total_points + ? WHERE id = ?', task.points, task.student_id)
+    const student = await getAsync('SELECT * FROM students WHERE id = ?', task.student_id)
+
+    if (student && student.pet_type) {
+      const newExp = Math.max(0, student.total_points)
+      const newLevel = calculateLevel(newExp)
+
+      if (newLevel === 8 && student.pet_level < 8) {
+        const badgeId = uuidv4()
+        await runAsync('INSERT INTO badges (id, student_id, pet_type, earned_at) VALUES (?, ?, ?, ?)', badgeId, task.student_id, student.pet_type, now)
+      }
+      await runAsync('UPDATE students SET pet_exp = ?, pet_level = ? WHERE id = ?', newExp, newLevel, task.student_id)
+    }
+
+    res.json({ success: true })
+  } catch (error) {
+    console.error('审核任务失败:', error)
+    res.status(500).json({ error: '审核任务失败' })
+  }
+})
+
+// 12. 审核拒绝任务申报 (教师权限)
+router.post('/tasks/:id/reject', authMiddleware, async (req, res) => {
+  try {
+    const task = await getAsync(`
+      SELECT ta.*
+      FROM student_task_applications ta
+      JOIN students s ON ta.student_id = s.id
+      JOIN classes c ON s.class_id = c.id
+      WHERE ta.id = ? AND c.user_id = ?
+    `, req.params.id, req.userId)
+
+    if (!task) {
+      return res.status(404).json({ error: '任务申报不存在或无权审核' })
+    }
+
+    if (task.status !== 'pending') {
+      return res.status(400).json({ error: '该申请已被审核处理' })
+    }
+
+    await runAsync("UPDATE student_task_applications SET status = 'rejected' WHERE id = ?", req.params.id)
+    res.json({ success: true })
+  } catch (error) {
+    console.error('拒绝任务失败:', error)
+    res.status(500).json({ error: '拒绝任务失败' })
+  }
+})
+
 export default router
 export { deviceAuthMiddleware }

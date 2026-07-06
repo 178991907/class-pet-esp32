@@ -581,11 +581,12 @@ async function openPetSelect(student: Student) {
 }
 
 async function selectPet(petId: string) {
-  if (!selectedStudent.value) return
+  const student = selectedStudent.value
+  if (!student) return
   try {
-    await api.put(`/students/${selectedStudent.value.id}/pet`, { petType: petId })
+    await api.put(`/students/${student.id}/pet`, { petType: petId })
     const pet = getPetType(petId)
-    toast.success(`🎉 ${selectedStudent.value.name} 领养了一只 ${pet?.name || '宠物'}！`)
+    toast.success(`🎉 ${student.name} 领养了一只 ${pet?.name || '宠物'}！`)
     showPetModal.value = false
     selectedStudent.value = null
     await loadStudents()
