@@ -7,6 +7,7 @@ import { authMiddleware } from '../middleware/auth.js'
 
 const router = Router()
 const lastVoiceRequestTimes = new Map()
+const unboundDevices = new Map()
 
 // ================= 安全防重放中间件 =================
 
@@ -231,7 +232,10 @@ router.post('/voice', deviceAuthMiddleware, async (req, res) => {
     `, deviceId)
 
     if (!student) {
-      return res.status(403).json({ error: '设备尚未绑定学生，无法执行操作' })
+      unboundDevices.set(deviceId, now)
+      return res.status(403).json({ error: '设备尚未绑定学生，无法执行操作', status: 'unbound' })
+    } else {
+      unboundDevices.delete(deviceId)
     }
 
     // ASR 语音合成在未配置 ASR Key 时的测试降级：必须包含文本
@@ -561,7 +565,10 @@ router.get('/schedules', deviceAuthMiddleware, async (req, res) => {
   try {
     const student = await getAsync('SELECT id FROM students WHERE device_id = ?', req.deviceId)
     if (!student) {
+      unboundDevices.set(req.deviceId, Date.now())
       return res.json({ status: 'unbound', schedules: [] })
+    } else {
+      unboundDevices.delete(req.deviceId)
     }
     // 自动更新 last_seen 心跳时间
     await runAsync('UPDATE students SET last_seen = ? WHERE id = ?', Date.now(), student.id)
@@ -667,7 +674,10 @@ router.post('/heartbeat', deviceAuthMiddleware, async (req, res) => {
   try {
     const student = await getAsync('SELECT id FROM students WHERE device_id = ?', deviceId)
     if (!student) {
-      return res.status(404).json({ error: '未找到绑定该设备的学生' })
+      unboundDevices.set(deviceId, Date.now())
+      return res.json({ status: 'unbound', error: '未找到绑定该设备的学生' })
+    } else {
+      unboundDevices.delete(deviceId)
     }
     
     // 更新电量、充电状态和心跳活跃时间
@@ -682,6 +692,22 @@ router.post('/heartbeat', deviceAuthMiddleware, async (req, res) => {
     console.error('设备心跳上报失败:', error)
     res.status(500).json({ error: '服务器内部错误' })
   }
+})
+
+// 9. 获取最近 5 分钟内活跃的未绑定设备列表 (教师权限)
+router.get('/unbound-devices', authMiddleware, async (req, res) => {
+  const now = Date.now()
+  const list = []
+  
+  for (const [devId, timestamp] of unboundDevices.entries()) {
+    if (now - timestamp > 300000) {
+      unboundDevices.delete(devId)
+    } else {
+      list.push({ deviceId: devId, lastSeen: timestamp })
+    }
+  }
+  
+  res.json({ success: true, devices: list })
 })
 
 export default router

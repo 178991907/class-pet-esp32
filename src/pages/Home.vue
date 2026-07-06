@@ -105,6 +105,7 @@ const showChatLogsModal = ref(false)
 const chatLogsList = ref<any[]>([])
 const loadingChatLogs = ref(false)
 const auditingStudent = ref<any>(null)
+const unboundDevicesList = ref<any[]>([])
 
 const showSchedulesModal = ref(false)
 const schedulesList = ref<any[]>([])
@@ -480,6 +481,24 @@ async function addStudent() {
   }
 }
 
+async function loadUnboundDevices() {
+  try {
+    const res = await api.get('/device/unbound-devices')
+    unboundDevicesList.value = res.data.devices || []
+  } catch (err) {
+    console.error('加载未绑定设备失败:', err)
+  }
+}
+
+function openAddStudentModal() {
+  editingStudent.value = null
+  newStudentName.value = ''
+  newStudentNo.value = ''
+  newStudentDeviceId.value = ''
+  showStudentModal.value = true
+  loadUnboundDevices()
+}
+
 function openEditStudentModal(student: Student) {
   editingStudent.value = student
   newStudentName.value = student.name
@@ -488,6 +507,7 @@ function openEditStudentModal(student: Student) {
   newStudentDeviceId.value = (student as any).device_id || ''
   showDetailPanel.value = false
   showStudentModal.value = true
+  loadUnboundDevices()
 }
 
 async function updateStudent() {
@@ -1339,7 +1359,7 @@ onMounted(async () => {
           <div v-if="showStudentMenu" @click="showStudentMenu = false" class="fixed inset-0 z-40"></div>
           <Transition name="dropdown">
             <div v-if="showStudentMenu" class="absolute right-0 top-full mt-1.5 bg-white rounded-xl shadow-xl border border-gray-100 py-1.5 w-40 z-50 overflow-hidden">
-              <button @click="showStudentModal = true" class="w-full text-left px-3 py-2 text-sm hover:bg-gradient-to-r hover:from-orange-50 hover:to-pink-50 transition-colors">➕ 添加</button>
+              <button @click="openAddStudentModal()" class="w-full text-left px-3 py-2 text-sm hover:bg-gradient-to-r hover:from-orange-50 hover:to-pink-50 transition-colors">➕ 添加</button>
               <button @click="openImportModal" class="w-full text-left px-3 py-2 text-sm hover:bg-gradient-to-r hover:from-orange-50 hover:to-pink-50 transition-colors">📥 导入</button>
               <button @click="showDeleteStudentMode = true; deleteStudentList = []" class="w-full text-left px-3 py-2 text-sm text-red-500 hover:bg-red-50 transition-colors">🗑️ 删除</button>
             </div>
@@ -1446,7 +1466,7 @@ onMounted(async () => {
           </p>
           <div v-if="currentRole !== 'student' && !isGuest" class="flex gap-3">
             <button 
-              @click="showStudentModal = true"
+              @click="openAddStudentModal()"
               class="bg-gradient-to-r from-orange-400 to-pink-500 text-white px-6 py-3 rounded-2xl hover:shadow-lg hover:scale-105 transition-all font-bold"
             >
               ➕ 添加学生
@@ -1698,6 +1718,21 @@ onMounted(async () => {
             placeholder="设备唯一标识（Device ID，可选）"
             class="w-full border-2 border-gray-200 rounded-xl px-5 py-3 mb-6 focus:outline-none focus:border-orange-400 transition-colors"
           />
+          
+          <!-- 未绑定设备发现池 -->
+          <div v-if="unboundDevicesList.length > 0" class="mb-6 bg-orange-50/70 border border-orange-100 rounded-2xl p-4 text-xs">
+            <span class="font-bold text-orange-800 block mb-2 flex items-center gap-1">
+              <span>📡</span> 发现最近开机的未绑定设备:
+            </span>
+            <div class="flex flex-col gap-2">
+              <div v-for="dev in unboundDevicesList" :key="dev.deviceId" class="flex justify-between items-center bg-white p-2.5 rounded-xl border border-orange-200/45 shadow-sm">
+                <span class="font-mono text-gray-700 font-bold select-all text-xs">{{ dev.deviceId }}</span>
+                <button @click="newStudentDeviceId = dev.deviceId" class="text-orange-600 hover:text-orange-700 font-bold px-2.5 py-1 bg-orange-100/50 rounded-lg transition-colors">一键绑定</button>
+              </div>
+            </div>
+            <p class="text-[10px] text-gray-400 mt-2">提示：开发板开机连上 Wi-Fi 时会自动在此列出，点击一键绑定即可，免去手动输入。</p>
+          </div>
+
           <div class="flex gap-3 justify-end">
             <button @click="showStudentModal = false; editingStudent = null; newStudentName = ''; newStudentNo = ''; newStudentDeviceId = ''" class="px-6 py-3 text-gray-500 hover:text-gray-700 font-medium transition-colors">取消</button>
             <button @click="editingStudent ? updateStudent() : addStudent()" class="bg-gradient-to-r from-orange-400 to-pink-500 text-white px-8 py-3 rounded-xl font-bold hover:shadow-lg transition-all">
