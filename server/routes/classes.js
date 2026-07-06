@@ -69,6 +69,8 @@ router.delete('/:id', authMiddleware, async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: '删除班级失败' })
   }
+})
+
 // 获取班级学生列表
 router.get('/:classId/students', authMiddleware, async (req, res) => {
   try {
