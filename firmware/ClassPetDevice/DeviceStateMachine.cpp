@@ -4,6 +4,7 @@
  */
 
 #include "DeviceStateMachine.h"
+#include "Board.h"
 #include "ClassPetUI.h"
 #include "LcdDisplay.h"
 #include "ApiClient.h"
@@ -116,8 +117,13 @@ void DeviceStateMachine::init() {
   // 1. 创建 FreeRTOS 队列（深度 16，传输 DeviceEvent）
   _queue = xQueueCreate(16, sizeof(DeviceEvent));
   
-  // 2. 启动状态机子线程，堆栈 16KB，运行在 Core 1
-  xTaskCreatePinnedToCore(taskEntry, "AppStateMachineTask", 16384, this, 5, nullptr, 1);
+  // 2. 启动状态机子线程，堆栈增大为 16KB 防止栈溢出，运行在 Core 1
+  BaseType_t ret = xTaskCreatePinnedToCore(taskEntry, "AppStateMachineTask", 16384, this, 5, nullptr, 1);
+  if (ret != pdPASS) {
+    Serial.printf("❌ [状态机] 创建 FreeRTOS 状态机任务失败! 错误码: %d\n", ret);
+  } else {
+    Serial.println("✅ [状态机] 创建 FreeRTOS 状态机任务成功！");
+  }
 }
 
 void DeviceStateMachine::postEvent(DeviceEvent ev) {
@@ -150,19 +156,31 @@ void DeviceStateMachine::taskEntry(void* arg) {
 // ==========================================
 void DeviceStateMachine::handleEvent(DeviceEvent ev) {
   switch (ev) {
-    case EVENT_POMODORO_START:
+    case EVENT_POMODORO_SETTINGS:
       if (_state == STATE_NORMAL_ONLINE || _state == STATE_NORMAL_OFFLINE) {
+        DEBUG_PRINTLN("🍅 [状态机] 收到事件: 进入番茄钟设置");
+        _state = STATE_POMODORO_SETTINGS;
+        LVGL_LOCK();
+        ClassPetUI::getInstance().showTomatoSettings();
+        LVGL_UNLOCK();
+      }
+      break;
+      
+    case EVENT_POMODORO_START:
+      if (_state == STATE_NORMAL_ONLINE || _state == STATE_NORMAL_OFFLINE || _state == STATE_POMODORO_SETTINGS) {
         DEBUG_PRINTLN("🍅 [状态机] 收到事件: 启动番茄工作钟");
-        tomatoTimer.start(25); // 开启 25 分钟番茄钟
+        uint32_t mins = ClassPetUI::getInstance().getSelectedTomatoTime();
+        tomatoTimer.start(mins);
         _state = STATE_POMODORO;
       }
       break;
       
     case EVENT_POMODORO_STOP:
-      if (_state == STATE_POMODORO) {
-        DEBUG_PRINTLN("🍅 [状态机] 收到事件: 退出番茄工作钟");
+      if (_state == STATE_POMODORO || _state == STATE_POMODORO_SETTINGS) {
+        DEBUG_PRINTLN("🍅 [状态机] 收到事件: 退出番茄钟");
         tomatoTimer.stop();
-        _state = STATE_NORMAL_ONLINE;
+        _state = STATE_NORMAL_ONLINE; // 强行退出回在线态 (如果有网的话，依靠 loop 自行纠正离线)
+        _last_sync_time = millis(); // 退出时重置同步时间，避免立刻被网络同步阻塞导致 UI 卡顿
       }
       break;
       
@@ -243,7 +261,6 @@ void DeviceStateMachine::handleEvent(DeviceEvent ev) {
 // 状态周期轮询器 (State Poller)
 // ==========================================
 void DeviceStateMachine::loopState() {
-  static unsigned long lastUpdate = 0;
   static unsigned long lastOfflineCheck = 0;
   
   switch (_state) {
@@ -346,7 +363,7 @@ void DeviceStateMachine::loopState() {
     
     case STATE_NORMAL_ONLINE: {
       // 每 20 秒定时上报心跳并同步数据
-      if (millis() - lastUpdate > 20000) {
+      if (millis() - _last_sync_time > 20000) {
         if (!Network::isConnected()) {
           postEvent(EVENT_NET_LOST);
           break;
@@ -381,7 +398,7 @@ void DeviceStateMachine::loopState() {
           }
         }
         
-        lastUpdate = millis();
+        _last_sync_time = millis();
       }
       
       // 更新在线屏幕显示（加锁保护 LVGL）
@@ -484,34 +501,53 @@ void DeviceStateMachine::loopState() {
     }
     
     case STATE_RECORDING: {
-      // 模拟录音 2 秒，绘制波形
-      for (int i = 0; i < 4; i++) {
+      audio->startRecording();
+      uint32_t recordStart = millis();
+      bool is_btn_start = (digitalRead(PHYSICAL_KEY_PIN) == LOW);
+      
+      // 等待按键释放，或者超时 (实体键最长 10 秒，触屏固定 5 秒)，或者触摸屏收到停止事件
+      uint32_t timeout = is_btn_start ? 10000 : 5000;
+      while (millis() - recordStart < timeout) {
         LVGL_LOCK();
-        ClassPetUI::getInstance().showRecordingScreen(random(30, 95));
+        ClassPetUI::getInstance().showRecordingScreen(audio->getRecordVolumeDb());
         LVGL_UNLOCK();
-        vTaskDelay(pdMS_TO_TICKS(500));
+        
+        if (is_btn_start) {
+          if (digitalRead(PHYSICAL_KEY_PIN) == HIGH) break;
+        } else {
+          DeviceEvent ev;
+          if (xQueuePeek(_queue, &ev, 0) == pdTRUE) {
+            if (ev == EVENT_VOICE_RECORD_DONE) {
+               break;
+            }
+          }
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
       }
+      
+      if (!is_btn_start) {
+         DeviceEvent ev;
+         // 消费掉队列中的停止事件
+         if (xQueuePeek(_queue, &ev, 0) == pdTRUE && ev == EVENT_VOICE_RECORD_DONE) {
+             xQueueReceive(_queue, &ev, 0); 
+         }
+      }
+      
       postEvent(EVENT_VOICE_RECORD_DONE);
       break;
     }
     
     case STATE_PROCESSING: {
       LVGL_LOCK();
-      ClassPetUI::getInstance().showProcessingScreen("Uploading points...");
+      ClassPetUI::getInstance().showProcessingScreen("识别中...");
       LVGL_UNLOCK();
       
-      // 随机分配一个模拟语音指令进行测试
-      const char* testTexts[] = {
-        "我完成了认真打扫卫生", 
-        "帮我申请平时测验满分",
-        "我完成了早读认真专注",
-        "查询我现在多少分"
-      };
-      String selectedText = testTexts[random(0, 4)];
-      DEBUG_PRINTF("🎙️ ASR 模拟语音: \"%s\"\n", selectedText.c_str());
+      uint8_t* wavBuf = nullptr;
+      size_t wavSize = 0;
+      audio->stopRecording(wavBuf, wavSize);
       
       VoiceActionResponse res;
-      ApiClient::postVoiceText(selectedText, res);
+      ApiClient::postVoiceAudio("/record.wav", res);
       
       if (res.success) {
         LVGL_LOCK();
@@ -525,7 +561,7 @@ void DeviceStateMachine::loopState() {
         }
       } else {
         LVGL_LOCK();
-        ClassPetUI::getInstance().showToast("Voice action failed", 3000);
+        ClassPetUI::getInstance().showToast(res.error_msg.c_str(), 3000);
         LVGL_UNLOCK();
         _state = STATE_NORMAL_ONLINE;
       }
@@ -547,7 +583,7 @@ void DeviceStateMachine::loopState() {
   }
 }
 
-#include <FFat.h>
+#include <SD_MMC.h>
 
 void DeviceStateMachine::loadPetGif(const String& petType, int petLevel) {
   DEBUG_PRINTF("🎨 [GIF] loadPetGif 被调用: petType='%s', petLevel=%d, 已缓存='%s', buf=%s\n",
@@ -565,26 +601,37 @@ void DeviceStateMachine::loadPetGif(const String& petType, int petLevel) {
   
   // 1. 尝试下载（如果本地没有）
   DEBUG_PRINTLN("🎨 [GIF] 开始尝试下载...");
-  ApiClient::downloadAsset(petType, petLevel);
+  bool dl_res = ApiClient::downloadAsset(petType, petLevel);
+  DEBUG_PRINTF("🎨 [GIF] 下载尝试完成，结果: %d\n", dl_res);
   
   // 2. 从本地读取
   String filename = "/" + petType + "_" + String(petLevel) + "_v4.gif";
-  if (!FFat.exists(filename)) {
+  DEBUG_PRINTF("🎨 [GIF] 正在确认本地文件是否存在: %s\n", filename.c_str());
+  bool file_exists = SD_MMC.exists(filename);
+  DEBUG_PRINTF("🎨 [GIF] 本地文件存在状态: %d\n", file_exists);
+  if (!file_exists) {
     DEBUG_PRINTLN("❌ 本地无宠物 GIF，且下载失败");
     return;
   }
   
-  fs::File f = FFat.open(filename, "r");
-  if (!f) return;
-  
-  size_t size = f.size();
-  uint8_t* new_buf = (uint8_t*)ps_malloc(size); // ESP32-S3 有 PSRAM
-  if (!new_buf) {
-    new_buf = (uint8_t*)malloc(size);
+  DEBUG_PRINTLN("🎨 [GIF] 正在打开文件...");
+  fs::File f = SD_MMC.open(filename, "r");
+  if (!f) {
+    DEBUG_PRINTLN("❌ 无法打开本地 GIF 文件");
+    return;
   }
   
+  size_t size = f.size();
+  DEBUG_PRINTF("🎨 [GIF] 文件大小: %u 字节，正在使用普通内存申请空间...\n", size);
+  
+  // 直接使用普通内存 (malloc)，避开 ps_malloc 以防板载无 PSRAM 时发生硬件挂起
+  uint8_t* new_buf = (uint8_t*)malloc(size);
+  DEBUG_PRINTF("🎨 [GIF] 内存申请完成，地址: %p\n", new_buf);
+  
   if (new_buf) {
+    DEBUG_PRINTLN("🎨 [GIF] 正在读取文件数据到内存...");
     f.read(new_buf, size);
+    DEBUG_PRINTLN("🎨 [GIF] 文件数据读取成功，即将发送至 UI 层...");
     
     // 释放旧缓冲
     if (_pet_gif_buffer) {
@@ -598,7 +645,7 @@ void DeviceStateMachine::loadPetGif(const String& petType, int petLevel) {
     
     // 通知 UI 层
     ClassPetUI::getInstance().setPetGif(_pet_gif_buffer, _pet_gif_size);
-    DEBUG_PRINTF("✅ 宠物动画 %s 加载完成并发送至 UI，大小: %u 字节\n", petType.c_str(), size);
+    DEBUG_PRINTLN("✅ [GIF] 成功向 UI 发送了 GIF 数据，加载操作完成！");
   } else {
     DEBUG_PRINTLN("❌ 内存不足，无法加载 GIF");
   }

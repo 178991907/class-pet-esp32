@@ -1,11 +1,15 @@
 import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import crypto from 'crypto'
+import multer from 'multer'
+import fetch from 'node-fetch'
+import FormData from 'form-data'
 import { getAsync, allAsync, runAsync } from '../db.js'
 import { calculateLevel } from '../utils/level.js'
 import { authMiddleware } from '../middleware/auth.js'
 
 const router = Router()
+const upload = multer({ storage: multer.memoryStorage() })
 const lastVoiceRequestTimes = new Map()
 const unboundDevices = new Map()
 
@@ -205,10 +209,19 @@ function getLevelProgress(exp) {
 
 // ================= 3. 语音 ASR 与大模型 NLP 意图分类 API =================
 
+import express from 'express'
+
 // 通用语音接收与智能核销路由
-router.post('/voice', deviceAuthMiddleware, async (req, res) => {
-  let { text } = req.body // 支持直接传递文字 text 调试降级
+router.post('/voice', deviceAuthMiddleware, express.raw({ type: 'audio/wav', limit: '10mb' }), upload.single('audio'), async (req, res) => {
+  let { text } = req.body || {}
   const deviceId = req.deviceId
+  
+  let audioBuffer = null
+  if (req.file) {
+    audioBuffer = req.file.buffer
+  } else if (Buffer.isBuffer(req.body)) {
+    audioBuffer = req.body
+  }
 
   try {
     // 限频检查：5秒防刷
@@ -217,11 +230,50 @@ router.post('/voice', deviceAuthMiddleware, async (req, res) => {
     if (now - lastTime < 5000) {
       return res.json({
         action: 'none',
-        text: text,
+        text: text || '语音',
         reply_text: '歇一会儿再聊哦，不要太频繁啦。'
       })
     }
     lastVoiceRequestTimes.set(deviceId, now)
+
+    // 如果上传了音频文件，执行 ASR
+    if (audioBuffer) {
+      try {
+        const apiKeyRow = await getAsync("SELECT value FROM settings WHERE key = 'openrouter_api_key'")
+        const apiKey = apiKeyRow ? JSON.parse(apiKeyRow.value) : ''
+        if (!apiKey) {
+          throw new Error('未配置 ASR API Key')
+        }
+        
+        const form = new FormData()
+        form.append('file', audioBuffer, { filename: 'record.wav', contentType: 'audio/wav' })
+        form.append('model', 'whisper-1')
+
+        const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            ...form.getHeaders()
+          },
+          body: form
+        })
+
+        if (!response.ok) {
+          const err = await response.text()
+          throw new Error(err)
+        }
+        const data = await response.json()
+        text = data.text
+        console.log(`🎙️ [ASR] 设备 ${deviceId} 语音识别结果: ${text}`)
+      } catch (asrErr) {
+        console.error('ASR 识别失败:', asrErr.message)
+        return res.json({
+          action: 'none',
+          text: '听不清楚',
+          reply_text: '抱歉，刚才没听清，请再说一遍。'
+        })
+      }
+    }
 
     // 获取绑定设备的学生
     const student = await getAsync(`
@@ -238,9 +290,8 @@ router.post('/voice', deviceAuthMiddleware, async (req, res) => {
       unboundDevices.delete(deviceId)
     }
 
-    // ASR 语音合成在未配置 ASR Key 时的测试降级：必须包含文本
     if (!text) {
-      return res.status(400).json({ error: 'ASR 未配置，请直接使用 text 属性进行调试输入。' })
+      return res.status(400).json({ error: '未提供音频文件或文本' })
     }
 
     let nlpResult = null
