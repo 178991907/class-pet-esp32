@@ -41,8 +41,17 @@ async function deviceAuthMiddleware(req, res, next) {
     }
 
     // 计算签名 (deviceId + timestamp + requestBody)
-    const requestBody = req.method === 'POST' ? JSON.stringify(req.body) : ''
-    const data = `${deviceId}${timestamp}${requestBody}`
+    // 针对 /voice 路由，由于是纯二进制流，设备端是用空字符串计算的签名
+    // 而此时中间件由于 req.body 还未经过 express.raw 解析，默认为 {}，所以需要特判处理
+    let bodyStr = ''
+    if (req.method === 'POST') {
+      if (req.path === '/voice') {
+        bodyStr = ''
+      } else {
+        bodyStr = JSON.stringify(req.body)
+      }
+    }
+    const data = `${deviceId}${timestamp}${bodyStr}`
     const expectedSignature = crypto.createHmac('sha256', SECRET).update(data).digest('hex')
 
     if (signature !== expectedSignature) {
