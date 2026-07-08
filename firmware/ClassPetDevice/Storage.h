@@ -11,10 +11,12 @@
 
 // 存储配置结构体
 struct DeviceConfig {
+  uint32_t magic_number;   // 用于校验是否为有效数据 (0x1A2B3C4D)
   char wifi_ssid[33];      // WiFi SSID
   char wifi_password[65];  // WiFi 密码
-  char server_url[128];    // 后端服务器地址 (如 http://192.168.1.100:3002)
+  char server_url[128];    // 后端服务器地址 (如 https://class-pet-esp32-ten.vercel.app)
   char device_secret[65];  // 设备 HMAC 签名密钥
+  char proxy_ip[16];       // 新增 Cloudflare 优选/代理 IP
   bool is_configured;      // 是否已配网
 };
 
@@ -31,7 +33,7 @@ public:
   
   // 系统配置读写
   static bool loadConfig(DeviceConfig& config);
-  static bool saveConfig(const DeviceConfig& config);
+  static bool saveConfig(DeviceConfig config);
   static void clearConfig();
 
   // 离线队列读写

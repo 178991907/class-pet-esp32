@@ -13,6 +13,75 @@
 #include "AudioHAL.h"
 #include "TomatoTimer.h"
 #include <WiFi.h>
+#include <ArduinoJson.h>
+
+// 电池 ADC 引脚 (适用于 Caturda / Sunton 2.8寸 S3 屏)
+#define PIN_BATTERY_ADC 9
+
+// 电池平滑电压状态
+static float smoothed_voltage = -1.0f;
+
+// 锂电池放电曲线电压->百分比映射表
+struct LiPoCurve { float v; int p; };
+static const LiPoCurve lipo_curve[] = {
+  {4.15f, 100},
+  {4.05f, 90},
+  {3.95f, 80},
+  {3.85f, 60},
+  {3.75f, 40},
+  {3.65f, 20},
+  {3.55f, 5},
+  {3.20f, 0}
+};
+
+// 内部函数：读取并计算电池电量
+static void getBatteryStatus(int& pct, bool& isCharging) {
+  // 多次采样求平均以过滤高频噪声
+  int raw_sum = 0;
+  const int samples = 20;
+  for (int i = 0; i < samples; i++) {
+    raw_sum += analogRead(PIN_BATTERY_ADC);
+  }
+  float raw_avg = (float)raw_sum / samples;
+  
+  // 计算实际电池电压
+  float current_voltage = (raw_avg / 4095.0f) * 3.3f * 2.0f;
+  
+  // 粗略校准：有时 ADC 读数偏小，可以加上偏移补偿
+  current_voltage += 0.05f; 
+
+  // IIR 低通滤波，极其平滑数据防止电量乱跳
+  if (smoothed_voltage < 0) {
+    smoothed_voltage = current_voltage; // 初始赋值
+  } else {
+    smoothed_voltage = smoothed_voltage * 0.95f + current_voltage * 0.05f;
+  }
+
+  // 查表法映射真实百分比
+  pct = 0;
+  if (smoothed_voltage >= lipo_curve[0].v) {
+    pct = 100;
+  } else if (smoothed_voltage <= lipo_curve[7].v) {
+    pct = 0;
+  } else {
+    for (int i = 0; i < 7; i++) {
+      if (smoothed_voltage <= lipo_curve[i].v && smoothed_voltage > lipo_curve[i+1].v) {
+        float v_range = lipo_curve[i].v - lipo_curve[i+1].v;
+        float p_range = lipo_curve[i].p - lipo_curve[i+1].p;
+        float fraction = (smoothed_voltage - lipo_curve[i+1].v) / v_range;
+        pct = lipo_curve[i+1].p + (int)(fraction * p_range);
+        break;
+      }
+    }
+  }
+
+  if (pct > 100) pct = 100;
+  if (pct < 0) pct = 0;
+  
+  // 由于这块主板没有专用的充电识别引脚（VBUS/CHRG），单靠电压阈值会发生频繁误判（闪烁）
+  // 最佳方案是直接屏蔽充电判定，只显示真实的电池百分比
+  isCharging = false;
+}
 
 // LVGL 多核互斥锁宏：状态机在 Core 1 操作 UI 前必须加锁
 #define LVGL_LOCK()   LcdDisplay::getInstance().lock()
@@ -274,6 +343,12 @@ void DeviceStateMachine::loopState() {
         ClassPetUI::getInstance().showNormalScreen(
           studentName, totalPoints, petLevel, expProgress, expRequired, isMaxLevel, isOnline
         );
+        
+        int batPct = 100;
+        bool isCharging = false;
+        getBatteryStatus(batPct, isCharging);
+        
+        ClassPetUI::getInstance().updateStatusBar(isOnline, WiFi.SSID(), batPct, isCharging);
         LVGL_UNLOCK();
       }
       break;
@@ -295,6 +370,12 @@ void DeviceStateMachine::loopState() {
       ClassPetUI::getInstance().showNormalScreen(
         studentName, totalPoints, petLevel, 0, 0, false, false
       );
+      
+      int batPct = 100;
+      bool isCharging = false;
+      getBatteryStatus(batPct, isCharging);
+      
+      ClassPetUI::getInstance().updateStatusBar(false, "", batPct, isCharging);
       LVGL_UNLOCK();
       break;
     }

@@ -16,6 +16,9 @@ public:
   // 启动番茄钟，传入倒计时分钟数，默认为 25 分钟
   void start(int minutes = 25);
   
+  // 设置/修改倒计时时长（可以在暂停或启动前调用）
+  void setDuration(int minutes);
+  
   // 暂停计时
   void pause();
 

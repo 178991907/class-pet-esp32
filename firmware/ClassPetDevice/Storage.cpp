@@ -5,30 +5,39 @@
 
 #include "Storage.h"
 #include <EEPROM.h>
+#include <FFat.h>
 #include "Config.h"
 
 void Storage::init() {
   DEBUG_PRINTLN("💾 正在初始化 EEPROM 存储模块...");
   EEPROM.begin(EEPROM_SIZE);
+  
+  DEBUG_PRINTLN("💾 正在初始化 FFat 文件系统...");
+  if (!FFat.begin(true)) {
+    DEBUG_PRINTLN("❌ FFat 挂载失败");
+  } else {
+    DEBUG_PRINTLN("✅ FFat 挂载成功");
+  }
 }
 
 bool Storage::loadConfig(DeviceConfig& config) {
   EEPROM.get(ADDR_CONFIG, config);
   
-  // 检查是否已有效配网
-  if (config.is_configured) {
+  // 检查是否已有效配网，并且具备正确的魔数校验，以防读到全新 Flash 中的垃圾数据
+  if (config.magic_number == 0x1A2B3C4D && config.is_configured) {
     DEBUG_PRINTLN("💾 成功加载本地存储配置:");
     DEBUG_PRINTF("   - SSID: %s\n", config.wifi_ssid);
     DEBUG_PRINTF("   - Server: %s\n", config.server_url);
     return true;
   }
   
-  DEBUG_PRINTLN("💾 本地无有效配网配置。");
+  DEBUG_PRINTLN("💾 本地无有效配网配置或校验失败。");
   return false;
 }
 
-bool Storage::saveConfig(const DeviceConfig& config) {
+bool Storage::saveConfig(DeviceConfig config) {
   DEBUG_PRINTLN("💾 正在向本地写入配网配置...");
+  config.magic_number = 0x1A2B3C4D; // 强制打上合法数据标签
   EEPROM.put(ADDR_CONFIG, config);
   bool success = EEPROM.commit();
   if (success) {

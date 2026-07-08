@@ -22,6 +22,16 @@ const PORT = 3002
 app.use(cors())
 app.use(express.json())
 
+// 提供 public 文件夹下的静态资源 (用于让开发板下载 GIF 等)
+import path from 'path'
+import { fileURLToPath } from 'url'
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+app.use('/images', express.static(path.join(__dirname, 'public/images')))
+app.use('/pet-garden/images', express.static(path.join(__dirname, 'public/images'))) // 兼容带前缀的路径
+app.use('/pets', express.static(path.join(__dirname, '../public/pets')))
+app.use('/pet-garden/pets', express.static(path.join(__dirname, '../public/pets')))
+
 // 兼容 Vercel 部署环境的代理路径：消除 /pet-garden/api 前缀
 app.use((req, res, next) => {
   if (req.url.startsWith('/pet-garden/api/')) {

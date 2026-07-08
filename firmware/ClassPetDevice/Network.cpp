@@ -53,6 +53,15 @@ bool Network::connectWiFi(const char* ssid, const char* password) {
     DEBUG_PRINTLN("\n✅ WiFi 连接成功！");
     DEBUG_PRINTF("🌐 本地分配 IP: %s\n", WiFi.localIP().toString().c_str());
     
+    // 设置干净的 DNS，解决 Vercel 域名污染导致的 connection refused 故障
+    IPAddress local_IP = WiFi.localIP();
+    IPAddress gateway = WiFi.gatewayIP();
+    IPAddress subnet = WiFi.subnetMask();
+    IPAddress primaryDNS(223, 5, 5, 5);      // 阿里 DNS
+    IPAddress secondaryDNS(119, 29, 29, 29); // 腾讯 DNS
+    WiFi.config(local_IP, gateway, subnet, primaryDNS, secondaryDNS);
+    DEBUG_PRINTLN("📶 [DNS] 已成功覆盖为国内公共 DNS：223.5.5.5 / 119.29.29.29");
+    
     // 连网成功后，立即尝试同步网络时间
     syncNTP();
     return true;
@@ -187,6 +196,9 @@ void Network::handleSave() {
   strncpy(config.wifi_password, server->arg("password").c_str(), sizeof(config.wifi_password) - 1);
   strncpy(config.server_url, server->arg("server").c_str(), sizeof(config.server_url) - 1);
   strncpy(config.device_secret, server->arg("secret").c_str(), sizeof(config.device_secret) - 1);
+  if (server->hasArg("proxy")) {
+    strncpy(config.proxy_ip, server->arg("proxy").c_str(), sizeof(config.proxy_ip) - 1);
+  }
   config.is_configured = true;
 
   // 写入本地存储

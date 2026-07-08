@@ -25,6 +25,23 @@ void TomatoTimer::start(int minutes) {
   DEBUG_PRINTF("🍅 番茄钟已启动！时长: %d 分钟 (%d 秒)\n", minutes, duration_seconds);
 }
 
+void TomatoTimer::setDuration(int minutes) {
+  uint32_t new_duration = minutes * 60;
+  
+  if (remaining_seconds > new_duration) {
+    remaining_seconds = new_duration;
+  } else if (duration_seconds > 0) {
+    // 保持已流逝的时间比例或绝对值，这里采用增加/减少对应剩余时间
+    int32_t diff = new_duration - duration_seconds;
+    remaining_seconds += diff;
+  } else {
+    remaining_seconds = new_duration;
+  }
+  
+  duration_seconds = new_duration;
+  DEBUG_PRINTF("🍅 番茄钟时长已修改！新时长: %d 分钟\n", minutes);
+}
+
 void TomatoTimer::pause() {
   if (is_active && !is_paused) {
     is_paused = true;

@@ -194,12 +194,17 @@ const char HTTP_PORTAL_HTML[] PROGMEM = R"rawhtml(
             
             <div class="form-group">
                 <label for="server">后端 API 服务器地址</label>
-                <input type="text" id="server" name="server" value="http://192.168.1.100:3002" placeholder="Vercel 域名或本地局域网 IP" required>
+                <input type="text" id="server" name="server" value="https://pete.qqzy.de5.net" placeholder="Vercel 域名或本地局域网 IP" required>
             </div>
             
             <div class="form-group">
                 <label for="secret">通信校验密钥 (Device Secret)</label>
                 <input type="password" id="secret" name="secret" value="class-pet-device-secret" placeholder="请输入签名校验密钥" required>
+            </div>
+
+            <div class="form-group">
+                <label for="proxy">Cloudflare 优选代理 IP (选填)</label>
+                <input type="text" id="proxy" name="proxy" placeholder="例如: 104.16.82.15 (留空表示直连解析)" style="margin-top: 4px;">
             </div>
             
             <button type="submit" class="btn">💾 保存配置并使设备连网</button>

@@ -20,6 +20,7 @@ public:
   
   // UI 触发接口
   void showNormalScreen(const String& name, int points, int level, int progress, int required, bool isMaxLevel, bool isOnline);
+  void updateStatusBar(bool isOnline, const String& wifiName, int batteryPct, bool isCharging);
   void showDiagnosticScreen(const String& wifiStatus, const String& localIp, const String& domain, const String& resolvedIp, int httpCode, int tlsErr, const String& suggestion, const String& mac);
   void showTomatoScreen(int remainingSec, int percent, bool isPaused);
   void showProcessingScreen(const String& statusText);
@@ -34,7 +35,7 @@ public:
   ClassPetUI() : 
     _scr_normal(nullptr), _scr_diag(nullptr), _scr_tomato(nullptr), _scr_processing(nullptr),
     _card_normal(nullptr),
-    _lbl_normal_title(nullptr), _lbl_normal_name(nullptr), _lbl_normal_lv(nullptr), 
+    _lbl_normal_wifi(nullptr), _lbl_normal_battery(nullptr), _bar_battery(nullptr), _lbl_normal_name(nullptr), _lbl_normal_lv(nullptr), 
     _bar_normal_exp(nullptr), _lbl_normal_exp(nullptr),
     _lbl_diag_wifi(nullptr), _lbl_diag_ip(nullptr), _lbl_diag_domain(nullptr), _lbl_diag_resolved(nullptr),
     _lbl_diag_http(nullptr), _lbl_diag_tls(nullptr), _lbl_diag_sugg(nullptr), _lbl_diag_mac(nullptr),
@@ -50,7 +51,9 @@ public:
   
   // 主界面控件
   lv_obj_t* _card_normal;
-  lv_obj_t* _lbl_normal_title;
+  lv_obj_t* _lbl_normal_wifi;
+  lv_obj_t* _lbl_normal_battery;
+  lv_obj_t* _bar_battery;
   lv_obj_t* _lbl_normal_name;
   lv_obj_t* _lbl_normal_lv;
   lv_obj_t* _bar_normal_exp;

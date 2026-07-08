@@ -94,12 +94,47 @@ void ClassPetUI::init() {
 // 1. 初始化主正常宠物页 (ScreenNormal)
 // ==========================================
 void ClassPetUI::initNormalScreen() {
-  // A. 在线/离线状态指示
-  _lbl_normal_title = lv_label_create(_scr_normal);
-  lv_obj_set_pos(_lbl_normal_title, 15, 8);
-  lv_obj_set_style_text_color(_lbl_normal_title, LV_COLOR_SUCCESS, 0);
-  lv_obj_set_style_text_font(_lbl_normal_title, &my_font_cjk_16, 0);
-  lv_label_set_text(_lbl_normal_title, "在线");
+  // A. 顶部状态栏 - WiFi
+  _lbl_normal_wifi = lv_label_create(_scr_normal);
+  lv_obj_set_pos(_lbl_normal_wifi, 8, 8);
+  lv_obj_set_size(_lbl_normal_wifi, 220, 18); // 限制宽度和高度，强制不换行
+  lv_label_set_long_mode(_lbl_normal_wifi, LV_LABEL_LONG_DOT); // 超出部分显示省略号
+  lv_obj_set_style_text_color(_lbl_normal_wifi, LV_COLOR_SUCCESS, 0);
+  lv_obj_set_style_text_font(_lbl_normal_wifi, &my_font_cjk_16, 0);
+  lv_label_set_text(_lbl_normal_wifi, "未连接");
+  
+  // A. 顶部状态栏 - 电池外框 (右对齐)
+  _bar_battery = lv_bar_create(_scr_normal);
+  lv_obj_set_size(_bar_battery, 46, 18);
+  lv_obj_align(_bar_battery, LV_ALIGN_TOP_RIGHT, -15, 6);
+  
+  lv_obj_set_style_bg_color(_bar_battery, lv_color_hex(0xEEEEEE), 0); // 浅灰背景
+  lv_obj_set_style_bg_opa(_bar_battery, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(_bar_battery, 1, 0);
+  lv_obj_set_style_border_color(_bar_battery, LV_COLOR_TEXT, 0); // 黑色边框
+  lv_obj_set_style_radius(_bar_battery, 4, 0);
+  lv_obj_set_style_pad_all(_bar_battery, 2, 0); // 内边距，让里面的进度条留出空隙
+  
+  // 电池进度条指示器
+  lv_obj_set_style_bg_color(_bar_battery, LV_COLOR_SUCCESS, LV_PART_INDICATOR);
+  lv_obj_set_style_radius(_bar_battery, 2, LV_PART_INDICATOR);
+  lv_bar_set_range(_bar_battery, 0, 100);
+  lv_bar_set_value(_bar_battery, 100, LV_ANIM_OFF);
+
+  // 电池正极 (右侧小突起)
+  lv_obj_t* bat_cap = lv_obj_create(_scr_normal);
+  lv_obj_set_size(bat_cap, 3, 8);
+  lv_obj_align_to(bat_cap, _bar_battery, LV_ALIGN_OUT_RIGHT_MID, 1, 0); // 贴在右侧外侧
+  lv_obj_set_style_bg_color(bat_cap, LV_COLOR_TEXT, 0);
+  lv_obj_set_style_border_width(bat_cap, 0, 0);
+  lv_obj_set_style_radius(bat_cap, 1, 0);
+
+  // 电池百分比文本 (居中显示在电池上)
+  _lbl_normal_battery = lv_label_create(_bar_battery);
+  lv_obj_center(_lbl_normal_battery);
+  lv_obj_set_style_text_color(_lbl_normal_battery, lv_color_hex(0x222222), 0); // 深色文字
+  lv_obj_set_style_text_font(_lbl_normal_battery, &my_font_cjk_16, 0);
+  lv_label_set_text(_lbl_normal_battery, "100%");
   
   // B. 中心学生档案大卡片 (加宽以适应左右布局)
   _card_normal = lv_obj_create(_scr_normal);
@@ -115,6 +150,7 @@ void ClassPetUI::initNormalScreen() {
   lv_obj_set_style_shadow_color(card, lv_color_hex(0x000000), 0);
   lv_obj_set_style_shadow_opa(card, LV_OPA_10, 0);
   lv_obj_set_style_shadow_ofs_y(card, 4, 0);
+  lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE); // 禁用滚动，去除右侧多余的滚动条
   
   // 学生姓名标签 (居右对齐)
   _lbl_normal_name = lv_label_create(card);
@@ -350,13 +386,7 @@ void ClassPetUI::initProcessingScreen() {
 // ==========================================
 void ClassPetUI::showNormalScreen(const String& name, int points, int level, int progress, int required, bool isMaxLevel, bool isOnline) {
   // 设置标题
-  if (isOnline) {
-    lv_label_set_text(_lbl_normal_title, "在线");
-    lv_obj_set_style_text_color(_lbl_normal_title, LV_COLOR_SUCCESS, 0);
-  } else {
-    lv_label_set_text(_lbl_normal_title, "离线模式");
-    lv_obj_set_style_text_color(_lbl_normal_title, LV_COLOR_WARNING, 0);
-  }
+  // 在线状态不再直接修改_lbl_normal_title，交给 updateStatusBar 控制
   
   // 名字
   String petTitle = name + "的宠物";
@@ -526,8 +556,40 @@ void ClassPetUI::setPetGif(const void* data, size_t size) {
   // 为了保证层级和定位绝对正确，将动图挂载到卡片内部
   _gif_pet = lv_gif_create(_card_normal ? _card_normal : _scr_normal);
   lv_gif_set_src(_gif_pet, &_gif_dsc); // 传入结构体指针
-  // 动图在卡片内的左侧垂直居中对齐
-  lv_obj_align(_gif_pet, LV_ALIGN_LEFT_MID, 15, 0);
+  // 动图在卡片内的左侧垂直居中对齐，略微靠左避免遮挡文字
+  lv_obj_align(_gif_pet, LV_ALIGN_LEFT_MID, -5, 0);
   
   LcdDisplay::getInstance().unlock();
+}
+
+void ClassPetUI::updateStatusBar(bool isOnline, const String& wifiName, int batteryPct, bool isCharging) {
+  if (_lbl_normal_wifi) {
+    if (isOnline) {
+      lv_obj_set_style_text_color(_lbl_normal_wifi, LV_COLOR_SUCCESS, 0);
+      lv_label_set_text_fmt(_lbl_normal_wifi, "在线 | %s", wifiName.c_str());
+    } else {
+      lv_obj_set_style_text_color(_lbl_normal_wifi, LV_COLOR_WARNING, 0);
+      lv_label_set_text(_lbl_normal_wifi, "离线");
+    }
+  }
+
+  if (_bar_battery && _lbl_normal_battery) {
+    int pct = batteryPct;
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    
+    lv_bar_set_value(_bar_battery, pct, LV_ANIM_ON);
+    
+    if (isCharging) {
+      lv_label_set_text_fmt(_lbl_normal_battery, "%d%%", pct);
+      lv_obj_set_style_bg_color(_bar_battery, LV_COLOR_WARNING, LV_PART_INDICATOR); // 充电时显示橘黄色/黄色
+    } else {
+      lv_label_set_text_fmt(_lbl_normal_battery, "%d%%", pct);
+      if (pct <= 20) {
+        lv_obj_set_style_bg_color(_bar_battery, LV_COLOR_DANGER, LV_PART_INDICATOR);
+      } else {
+        lv_obj_set_style_bg_color(_bar_battery, LV_COLOR_SUCCESS, LV_PART_INDICATOR);
+      }
+    }
+  }
 }
