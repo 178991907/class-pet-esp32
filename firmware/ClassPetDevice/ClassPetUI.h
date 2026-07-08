@@ -20,6 +20,7 @@ public:
   
   // UI 触发接口
   void showNormalScreen(const String& name, int points, int level, int progress, int required, bool isMaxLevel, bool isOnline);
+  void updateClock(const String& timeStr, const String& dateStr);
   void updateStatusBar(bool isOnline, const String& wifiName, int batteryPct, bool isCharging);
   void showDiagnosticScreen(const String& wifiStatus, const String& localIp, const String& domain, const String& resolvedIp, int httpCode, int tlsErr, const String& suggestion, const String& mac);
   void showTomatoScreen(int remainingSec, int percent, bool isPaused);
@@ -37,9 +38,10 @@ public:
     _card_normal(nullptr),
     _lbl_normal_wifi(nullptr), _lbl_normal_battery(nullptr), _bar_battery(nullptr), _lbl_normal_name(nullptr), _lbl_normal_lv(nullptr), 
     _bar_normal_exp(nullptr), _lbl_normal_exp(nullptr),
+    _lbl_time(nullptr), _lbl_date(nullptr), _drawer(nullptr), _drawer_is_open(false),
     _lbl_diag_wifi(nullptr), _lbl_diag_ip(nullptr), _lbl_diag_domain(nullptr), _lbl_diag_resolved(nullptr),
     _lbl_diag_http(nullptr), _lbl_diag_tls(nullptr), _lbl_diag_sugg(nullptr), _lbl_diag_mac(nullptr),
-    _lbl_tomato_time(nullptr), _bar_tomato_progress(nullptr), _lbl_tomato_status(nullptr),
+    _lbl_tomato_time(nullptr), _arc_tomato_progress(nullptr), _lbl_tomato_status(nullptr),
     _lbl_proc_text(nullptr), _bar_rec_vol(nullptr), _toast_label(nullptr), _toast_container(nullptr),
     _gif_pet(nullptr) {}
   
@@ -58,6 +60,11 @@ public:
   lv_obj_t* _lbl_normal_lv;
   lv_obj_t* _bar_normal_exp;
   lv_obj_t* _lbl_normal_exp;
+  lv_obj_t* _lbl_time;
+  lv_obj_t* _lbl_date;
+  lv_obj_t* _drawer;
+  bool _drawer_is_open;
+  
   lv_obj_t* _gif_pet;
   lv_image_dsc_t _gif_dsc; // LVGL 9 需要包装成 img_dsc
   
@@ -73,7 +80,7 @@ public:
   
   // 番茄钟控件
   lv_obj_t* _lbl_tomato_time;
-  lv_obj_t* _bar_tomato_progress;
+  lv_obj_t* _arc_tomato_progress;
   lv_obj_t* _lbl_tomato_status;
   
   // 进度/录音界面控件
@@ -91,6 +98,10 @@ public:
   
   // 内部辅助
   static void toastTimerCb(lv_timer_t* timer);
+  static void drawer_anim_cb(void* var, int32_t v);
+  static void gesture_event_cb(lv_event_t* e);
+  static void btn_toggle_drawer_cb(lv_event_t* e);
+  void toggleDrawer();
   
   // 统一界面跳转
   void loadScreen(lv_obj_t* scr);

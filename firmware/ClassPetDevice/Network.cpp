@@ -11,6 +11,7 @@
 
 // 静态成员变量实例化
 WebServerType* Network::server = nullptr;
+DNSServer* Network::dnsServer = nullptr;
 bool Network::is_ap_active = false;
 String Network::cached_mac = "";
 
@@ -93,10 +94,16 @@ void Network::startAP() {
   // 开启无密码开放式热点（手机极易连接）
   WiFi.softAP(apSSID.c_str());
 
-  // 启动 Web 服务器
+  // 启动 Web 服务器和 DNS 服务器
   if (server == nullptr) {
     server = new WebServerType(80);
   }
+  if (dnsServer == nullptr) {
+    dnsServer = new DNSServer();
+  }
+
+  // 捕获所有 DNS 请求并重定向到本地 IP (Captive Portal 核心)
+  dnsServer->start(53, "*", local_IP);
 
   server->on("/", HTTP_GET, handleRoot);
   server->on("/save", HTTP_POST, handleSave);
@@ -120,6 +127,12 @@ void Network::stopAP() {
     server = nullptr;
   }
   
+  if (dnsServer != nullptr) {
+    dnsServer->stop();
+    delete dnsServer;
+    dnsServer = nullptr;
+  }
+  
   WiFi.softAPdisconnect(true);
   WiFi.mode(WIFI_STA);
   is_ap_active = false;
@@ -127,8 +140,13 @@ void Network::stopAP() {
 }
 
 void Network::handleAPClient() {
-  if (is_ap_active && server != nullptr) {
-    server->handleClient();
+  if (is_ap_active) {
+    if (dnsServer != nullptr) {
+      dnsServer->processNextRequest();
+    }
+    if (server != nullptr) {
+      server->handleClient();
+    }
   }
 }
 

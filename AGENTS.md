@@ -226,3 +226,20 @@ app.get('/api/classes', (req, res) => {
 3. **同时运行两个服务器** 以获得完整功能：`npm run start`
 4. **代理配置** 在 Vite 中：`/pet-garden/api` → `http://localhost:3002`
 5. **构建前类型检查**：`vue-tsc` 随 `npm run build` 自动运行
+
+## 版本发布规范 (Release Workflow)
+当进行版本迭代或代码优化告一段落时，需**自动**执行以下完整发布流，**无需用户反复提醒**：
+1. **修改版本号**：更新 `package.json` 中的 `version` 字段。
+2. **更新文档**：在 `README.md` 的“最新版本”区域上方插入本次更新的特性列表（Release Notes）。
+3. **提交与推送代码**：
+   ```bash
+   git add .
+   git commit -m "chore: release vX.Y.Z (简短更新说明)"
+   git tag -a vX.Y.Z -m "vX.Y.Z Release"
+   git push origin main
+   git push origin vX.Y.Z
+   ```
+4. **生成 GitHub Release**：使用 `gh` CLI 自动创建发布并填入文案：
+   ```bash
+   gh release create vX.Y.Z --title "vX.Y.Z: 核心亮点标题" --notes "更新详情文案..."
+   ```

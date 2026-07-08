@@ -252,6 +252,12 @@ void DeviceStateMachine::loopState() {
       ClassPetUI::getInstance().showProcessingScreen("Connecting to WiFi...");
       LVGL_UNLOCK();
       
+      if (!deviceConfig.is_configured || strlen(deviceConfig.wifi_ssid) == 0) {
+        DEBUG_PRINTLN("⚠️ 设备未配网，进入 AP 配置模式");
+        _state = STATE_SETUP_AP;
+        break;
+      }
+      
       // 执行网络连接尝试
       if (WiFi.status() == WL_CONNECTED) {
         Network::syncNTP();
@@ -305,10 +311,36 @@ void DeviceStateMachine::loopState() {
           vTaskDelay(pdMS_TO_TICKS(2000)); // 诊断屏留驻 2s 缓冲
         }
       } else {
-        // 静默重连
-        WiFi.begin(deviceConfig.wifi_ssid, deviceConfig.wifi_password);
-        vTaskDelay(pdMS_TO_TICKS(3000));
+        static int retryCount = 0;
+        if (retryCount == 0) {
+          WiFi.begin(deviceConfig.wifi_ssid, deviceConfig.wifi_password);
+        }
+        retryCount++;
+        
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        
+        if (retryCount > 15) { // 15秒超时
+          DEBUG_PRINTLN("❌ WiFi 连接超时，开启 AP 配网热点");
+          retryCount = 0;
+          _state = STATE_SETUP_AP;
+        }
       }
+      break;
+    }
+    
+    case STATE_SETUP_AP: {
+      if (!Network::isAPActive()) {
+        Network::startAP();
+        
+        LVGL_LOCK();
+        // UI 上提示用户连接热点
+        String apSSID = String(AP_SSID_PREFIX) + Network::getMacAddress().substring(12, 14) + Network::getMacAddress().substring(15, 17);
+        ClassPetUI::getInstance().showProcessingScreen(String("请手机连接热点:\n" + apSSID + "\n浏览器打开 192.168.4.1").c_str());
+        LVGL_UNLOCK();
+      }
+      
+      Network::handleAPClient();
+      vTaskDelay(pdMS_TO_TICKS(100)); // 适当让出 CPU 给 WebServer 处理请求
       break;
     }
     
@@ -333,11 +365,44 @@ void DeviceStateMachine::loopState() {
         // 补传离线心跳
         ApiClient::sendHeartbeat(100, false);
         
+        // 尝试清空离线任务队列
+        int offlineCount = Storage::getOfflineQueueSize();
+        if (offlineCount > 0) {
+          DEBUG_PRINTF("💾 发现 %d 个离线任务，开始补传...\n", offlineCount);
+          OfflineTask task;
+          while (Storage::peekOfflineTask(task)) {
+            if (ApiClient::reportOfflineTask(task.task_name, task.points, task.timestamp)) {
+              Storage::popOfflineTask(task); // 上报成功，从队列中移除
+              vTaskDelay(pdMS_TO_TICKS(500)); // 避免频繁请求
+            } else {
+              DEBUG_PRINTLN("❌ 离线任务补传失败，稍后再试。");
+              break; // 网络错误或 API 错误，保留剩余队列
+            }
+          }
+        }
+        
         lastUpdate = millis();
       }
       
       // 更新在线屏幕显示（加锁保护 LVGL）
       {
+        static uint32_t lastClockUpdate = 0;
+        if (millis() - lastClockUpdate > 1000) {
+          struct tm tinfo;
+          if (getLocalTime(&tinfo)) {
+            char timeBuf[16];
+            char dateBuf[32];
+            snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", tinfo.tm_hour, tinfo.tm_min);
+            const char* wdays[] = {"日","一","二","三","四","五","六"};
+            snprintf(dateBuf, sizeof(dateBuf), "%d月%d日 星期%s", tinfo.tm_mon + 1, tinfo.tm_mday, wdays[tinfo.tm_wday]);
+            
+            LVGL_LOCK();
+            ClassPetUI::getInstance().updateClock(timeBuf, dateBuf);
+            LVGL_UNLOCK();
+          }
+          lastClockUpdate = millis();
+        }
+
         bool isOnline = (WiFi.status() == WL_CONNECTED);
         LVGL_LOCK();
         ClassPetUI::getInstance().showNormalScreen(
@@ -365,6 +430,24 @@ void DeviceStateMachine::loopState() {
         lastOfflineCheck = millis();
       }
       
+      // 更新时钟
+      static uint32_t lastOfflineClock = 0;
+      if (millis() - lastOfflineClock > 1000) {
+        struct tm tinfo;
+        if (getLocalTime(&tinfo)) {
+          char timeBuf[16];
+          char dateBuf[32];
+          snprintf(timeBuf, sizeof(timeBuf), "%02d:%02d", tinfo.tm_hour, tinfo.tm_min);
+          const char* wdays[] = {"日","一","二","三","四","五","六"};
+          snprintf(dateBuf, sizeof(dateBuf), "%d月%d日 星期%s", tinfo.tm_mon + 1, tinfo.tm_mday, wdays[tinfo.tm_wday]);
+          
+          LVGL_LOCK();
+          ClassPetUI::getInstance().updateClock(timeBuf, dateBuf);
+          LVGL_UNLOCK();
+        }
+        lastOfflineClock = millis();
+      }
+
       // 渲染离线屏幕（加锁保护 LVGL）
       LVGL_LOCK();
       ClassPetUI::getInstance().showNormalScreen(
