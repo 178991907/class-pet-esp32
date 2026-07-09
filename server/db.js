@@ -75,8 +75,10 @@ export async function initDb() {
       // 忽略已存在字段报错
     }
 
-    // 动态在 PostgreSQL 的 students 表中增加电量及心跳字段
+    // 动态在 PostgreSQL 的 students 表中增加 device_id, 电量及心跳字段
     try {
+      await pgPool.query("ALTER TABLE students ADD COLUMN IF NOT EXISTS device_id VARCHAR(64)")
+      await pgPool.query("CREATE UNIQUE INDEX IF NOT EXISTS idx_students_device_id ON students(device_id)")
       await pgPool.query("ALTER TABLE students ADD COLUMN IF NOT EXISTS battery_level INTEGER DEFAULT 100")
       await pgPool.query("ALTER TABLE students ADD COLUMN IF NOT EXISTS is_charging INTEGER DEFAULT 0")
       await pgPool.query("ALTER TABLE students ADD COLUMN IF NOT EXISTS last_seen BIGINT")
