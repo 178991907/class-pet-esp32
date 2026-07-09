@@ -268,4 +268,8 @@
  /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/libraries/SD_MMC/src/sd_defines.h \
  /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/libraries/SPIFFS/src/SPIFFS.h \
  /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/libraries/FFat/src/FFat.h \
- /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/tools/sdk/esp32s3/include/wear_levelling/include/wear_levelling.h
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/tools/sdk/esp32s3/include/wear_levelling/include/wear_levelling.h \
+ /Users/Terry/Downloads/class-pet-main/build/sketch/ES8311.h \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/libraries/Wire/src/Wire.h \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/cores/esp32/esp32-hal.h \
+ /Users/Terry/Downloads/class-pet-main/build/sketch/Board.h

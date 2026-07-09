@@ -17,6 +17,7 @@ struct DeviceConfig {
   char wifi_password[65];  // WiFi 密码
   char server_url[128];    // 后端服务器地址 (如 https://class-pet-esp32-ten.vercel.app)
   char device_secret[65];  // 设备 HMAC 签名密钥
+  char proxy_ip[16];       // 新增 Cloudflare 优选/代理 IP
   bool is_configured;      // 是否已配网
 };
 
@@ -42,6 +43,8 @@ public:
   static bool popOfflineTask(OfflineTask& task); // 获取并移除队列头部元素
   static bool peekOfflineTask(OfflineTask& task); // 仅读取队列头部元素
   static void clearOfflineQueue();
+
+  static bool formatSDCard();
 
 private:
   static const int EEPROM_SIZE = 2048; // 分配 2048 字节存储空间（需容纳配置+20条离线任务队列）

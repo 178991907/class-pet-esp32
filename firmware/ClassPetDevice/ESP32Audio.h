@@ -3,13 +3,20 @@
 
 #include "AudioHAL.h"
 #include <Audio.h> // ESP32-audioI2S 头文件
+#include <driver/i2s.h>
+#include <SD.h>
 
 class ESP32Audio : public AudioHAL {
 private:
   Audio audioStream;
   bool is_playing;
-  uint8_t* fake_wav_buffer;
-  size_t fake_wav_size;
+  bool is_recording;
+  File record_file;
+  uint32_t record_data_size;
+  uint32_t record_start_time;
+
+  void writeWavHeader();
+  void updateWavHeader();
 
 public:
   ESP32Audio();

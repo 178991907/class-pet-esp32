@@ -12,6 +12,7 @@
 
 // 静态成员变量实例化
 WebServerType* Network::server = nullptr;
+DNSServer* Network::dnsServer = nullptr;
 bool Network::is_ap_active = false;
 String Network::cached_mac = "";
 
@@ -54,6 +55,15 @@ bool Network::connectWiFi(const char* ssid, const char* password) {
     DEBUG_PRINTLN("\n✅ WiFi 连接成功！");
     DEBUG_PRINTF("🌐 本地分配 IP: %s\n", WiFi.localIP().toString().c_str());
     
+    // 设置干净的 DNS，解决 Vercel 域名污染导致的 connection refused 故障
+    IPAddress local_IP = WiFi.localIP();
+    IPAddress gateway = WiFi.gatewayIP();
+    IPAddress subnet = WiFi.subnetMask();
+    IPAddress primaryDNS(223, 5, 5, 5);      // 阿里 DNS
+    IPAddress secondaryDNS(119, 29, 29, 29); // 腾讯 DNS
+    WiFi.config(local_IP, gateway, subnet, primaryDNS, secondaryDNS);
+    DEBUG_PRINTLN("📶 [DNS] 已成功覆盖为国内公共 DNS：223.5.5.5 / 119.29.29.29");
+    
     // 连网成功后，立即尝试同步网络时间
     syncNTP();
     return true;
@@ -85,10 +95,16 @@ void Network::startAP() {
   // 开启无密码开放式热点（手机极易连接）
   WiFi.softAP(apSSID.c_str());
 
-  // 启动 Web 服务器
+  // 启动 Web 服务器和 DNS 服务器
   if (server == nullptr) {
     server = new WebServerType(80);
   }
+  if (dnsServer == nullptr) {
+    dnsServer = new DNSServer();
+  }
+
+  // 捕获所有 DNS 请求并重定向到本地 IP (Captive Portal 核心)
+  dnsServer->start(53, "*", local_IP);
 
   server->on("/", HTTP_GET, handleRoot);
   server->on("/save", HTTP_POST, handleSave);
@@ -112,6 +128,12 @@ void Network::stopAP() {
     server = nullptr;
   }
   
+  if (dnsServer != nullptr) {
+    dnsServer->stop();
+    delete dnsServer;
+    dnsServer = nullptr;
+  }
+  
   WiFi.softAPdisconnect(true);
   WiFi.mode(WIFI_STA);
   is_ap_active = false;
@@ -119,8 +141,13 @@ void Network::stopAP() {
 }
 
 void Network::handleAPClient() {
-  if (is_ap_active && server != nullptr) {
-    server->handleClient();
+  if (is_ap_active) {
+    if (dnsServer != nullptr) {
+      dnsServer->processNextRequest();
+    }
+    if (server != nullptr) {
+      server->handleClient();
+    }
   }
 }
 
@@ -188,6 +215,9 @@ void Network::handleSave() {
   strncpy(config.wifi_password, server->arg("password").c_str(), sizeof(config.wifi_password) - 1);
   strncpy(config.server_url, server->arg("server").c_str(), sizeof(config.server_url) - 1);
   strncpy(config.device_secret, server->arg("secret").c_str(), sizeof(config.device_secret) - 1);
+  if (server->hasArg("proxy")) {
+    strncpy(config.proxy_ip, server->arg("proxy").c_str(), sizeof(config.proxy_ip) - 1);
+  }
   config.is_configured = true;
 
   // 写入本地存储

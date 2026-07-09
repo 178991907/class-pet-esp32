@@ -1,0 +1,32 @@
+lv_font_manager.o: \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/font/font_manager/lv_font_manager.c \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/font/font_manager/lv_font_manager.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/font/font_manager/../../font/lv_font.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/font/font_manager/../../font/../lv_conf_internal.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/font/font_manager/../../font/../lv_conf_kconfig.h \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/tools/sdk/esp32s3/qio_opi/include/sdkconfig.h \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/tools/sdk/esp32s3/include/esp_common/include/esp_attr.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/font/font_manager/../../font/../../../lv_conf.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/font/font_manager/../../font/../misc/lv_types.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/font/font_manager/../../font/../misc/../lv_conf_internal.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/font/font_manager/../../font/lv_symbol_def.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/font/font_manager/../../font/../draw/lv_draw_buf.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/font/font_manager/../../font/../draw/../misc/lv_types.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/font/font_manager/../../font/../draw/../misc/lv_area.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/font/font_manager/../../font/../draw/../misc/../lv_conf_internal.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/font/font_manager/../../font/../draw/../misc/lv_types.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/font/font_manager/../../font/../draw/../misc/lv_math.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/font/font_manager/../../font/../draw/../misc/lv_color.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/font/font_manager/../../font/../draw/../misc/lv_assert.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/font/font_manager/../../font/../draw/../misc/lv_log.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/font/font_manager/../../font/../draw/../misc/../stdlib/lv_mem.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/font/font_manager/../../font/../draw/../misc/../stdlib/../lv_conf_internal.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/font/font_manager/../../font/../draw/../misc/../stdlib/lv_string.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/font/font_manager/../../font/../draw/../misc/../stdlib/../misc/lv_types.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/font/font_manager/../../font/../draw/../misc/lv_palette.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/font/font_manager/../../font/../draw/../misc/lv_color.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/font/font_manager/../../font/../draw/../misc/lv_color_op.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/font/font_manager/../../font/../draw/../stdlib/lv_string.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/font/font_manager/../../font/../draw/lv_image_dsc.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/font/font_manager/../../font/../draw/../lv_conf_internal.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/font/font_manager/../../font/../misc/lv_area.h

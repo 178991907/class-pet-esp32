@@ -66,16 +66,17 @@ void LcdDisplay::resetActivityTime() {
 }
 
 void LcdDisplay::update() {
-  // 息屏检查 (30秒无操作则息屏以省电加快充电)
-  if (_is_screen_on && (millis() - _last_activity_time > 30000)) {
+  // 息屏检查 (15秒无操作则直接息屏省电)
+  if (_is_screen_on && (millis() - _last_activity_time > 15000)) {
     _is_screen_on = false;
     digitalWrite(TFT_BL_PIN, LOW);
   }
 
   // 加锁保护 LVGL 渲染循环，防止与状态机跨核冲突
-  lock();
-  lv_timer_handler();
-  unlock();
+  if (xSemaphoreTake(_lvgl_mutex, portMAX_DELAY) == pdTRUE) {
+    lv_timer_handler();
+    xSemaphoreGive(_lvgl_mutex);
+  }
 }
 
 LcdDisplay::~LcdDisplay() {

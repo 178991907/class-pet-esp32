@@ -1,0 +1,13 @@
+--- firmware/ClassPetDevice/Storage.cpp
++++ firmware/ClassPetDevice/Storage.cpp
+@@ -24,8 +24,10 @@
+   }
+ 
+   DEBUG_PRINTLN("💾 正在初始化 SD 卡系统...");
+-  if (!SD_MMC.begin(SD_CS_PIN)) {
++  // 使用 1-bit 模式 SDIO (避免占用 D1/D2/D3，留给 I2S 麦克风)
++  SD_MMC.setPins(38, 40, 39); // CLK=38, CMD=40, D0=39
++  if (!SD_MMC.begin("/sdcard", true)) {
+     DEBUG_PRINTLN("⚠️ 未检测到 SD 卡，或挂载失败！");
+   } else {
+     uint8_t cardType = SD_MMC.cardType();

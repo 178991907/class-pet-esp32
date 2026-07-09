@@ -1,0 +1,54 @@
+/**
+ * @file Board.h
+ * @brief 班级宠物园设备硬件引脚与配置文件
+ */
+
+#ifndef BOARD_H
+#define BOARD_H
+
+// ==========================================
+// 1. 液晶显示屏引脚配置 (ST7789 SPI)
+// (注：TFT_eSPI 的具体引脚已由底层 User_Setup.h 托管，此处仅定义背光引脚)
+#define TFT_BL_PIN             45    // 屏幕背光引脚，高电平点亮
+
+// ==========================================
+// 2. 电容触摸屏引脚配置 (CST820 I2C)
+// ==========================================
+#define TOUCH_SDA_PIN          16   // I2C 数据引脚
+#define TOUCH_SCL_PIN          15   // I2C 时钟引脚
+#define TOUCH_INT_PIN          21   // 中断引脚
+#define TOUCH_RST_PIN          -1   // 复位引脚（有些版本接 25 或 4，此处设为 -1 走软复位）
+
+// ==========================================
+// 3. 音频输出引脚配置 (MAX98357A I2S DAC)
+// ==========================================
+#define I2S_BCLK_PIN           5    // I2S 比特时钟 (Bit Clock)
+#define I2S_LRC_PIN            7    // I2S 左右声道选择 (L/R Clock / WS)
+#define I2S_DOUT_PIN           6    // I2S 数据输出 (Data Out)
+
+// ==========================================
+// 4. 物理按键与指示配置 (IO0)
+// ==========================================
+#define PHYSICAL_KEY_PIN       0    // 物理按键 BOOT 引脚，按下为低电平
+
+// ==========================================
+// 5. TF卡 (SD SPI) 扩展存储
+// ==========================================
+#ifndef SD_CS_PIN
+#define SD_CS_PIN              10   // TF 卡 SPI CS (片选) 引脚，若不符请修改
+#endif
+
+// ==========================================
+// 6. 音频输入引脚配置 (I2S 麦克风)
+// ==========================================
+#ifndef I2S_MIC_SCK_PIN
+#define I2S_MIC_SCK_PIN        41   // 麦克风 I2S SCK / BCLK
+#endif
+#ifndef I2S_MIC_WS_PIN
+#define I2S_MIC_WS_PIN         42   // 麦克风 I2S WS / LRC
+#endif
+#ifndef I2S_MIC_SD_PIN
+#define I2S_MIC_SD_PIN         2    // 麦克风 I2S SD / DIN
+#endif
+
+#endif // BOARD_H

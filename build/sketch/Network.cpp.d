@@ -206,6 +206,8 @@
  /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/tools/sdk/esp32s3/include/nghttp/port/include/http_parser.h \
  /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/libraries/WebServer/src/Uri.h \
  /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/libraries/WebServer/src/detail/RequestHandler.h \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/libraries/DNSServer/src/DNSServer.h \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/libraries/WiFi/src/WiFiUdp.h \
  /Users/Terry/Downloads/class-pet-main/build/sketch/Config.h \
  /Users/Terry/Downloads/class-pet-main/build/sketch/Storage.h \
  /Users/Terry/Downloads/class-pet-main/build/sketch/WebPortal.h

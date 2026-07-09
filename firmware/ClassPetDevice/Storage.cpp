@@ -6,7 +6,14 @@
 #include "Storage.h"
 #include <EEPROM.h>
 #include <FFat.h>
+#include <SD_MMC.h>
+#include <SPI.h>
 #include "Config.h"
+#include "Board.h"
+
+
+#include "ff.h"
+#include <esp_idf_version.h>
 
 void Storage::init() {
   DEBUG_PRINTLN("💾 正在初始化 EEPROM 存储模块...");
@@ -18,6 +25,62 @@ void Storage::init() {
   } else {
     DEBUG_PRINTLN("✅ FFat 挂载成功");
   }
+
+  DEBUG_PRINTLN("💾 正在初始化 SD 卡系统...");
+  // 使用 1-bit 模式 SDIO (避免占用 D1/D2/D3，留给 I2S 麦克风)
+  SD_MMC.setPins(38, 40, 39); // CLK=38, CMD=40, D0=39
+  
+  // 限制时钟频率为 10MHz (10000 kHz)，提高抗干扰能力，防读写卡死
+  if (!SD_MMC.begin("/sdcard", true, false, 10000)) {
+    DEBUG_PRINTLN("⚠️ 未检测到 SD 卡，或挂载失败！");
+  } else {
+    uint8_t cardType = SD_MMC.cardType();
+    if (cardType == CARD_NONE) {
+      DEBUG_PRINTLN("⚠️ 警告：检测到 SD 卡模块，但无有效卡片。");
+    } else {
+      DEBUG_PRINTF("✅ SD 卡挂载成功！存储空间: %llu MB\n", SD_MMC.cardSize() / (1024 * 1024));
+      
+      // =======================================================
+      // 强制格式化 TF 卡调试宏 (若要格式化卡，请取消注释下一行，烧录运行一次后，再重新注释并烧录)
+      // #define FORCE_FORMAT_SD
+      // =======================================================
+      #ifdef FORCE_FORMAT_SD
+        formatSDCard();
+      #endif
+    }
+  }
+}
+
+bool Storage::formatSDCard() {
+  DEBUG_PRINTLN("💾 开始进行 TF 卡 (FAT32) 底层格式化...");
+  
+  char drv[3] = {'0', ':', 0};
+  const size_t workbuf_size = 4096;
+  void* workbuf = malloc(workbuf_size);
+  if (workbuf == NULL) {
+    DEBUG_PRINTLN("❌ 内存不足，无法分配格式化缓冲区");
+    return false;
+  }
+
+  FRESULT res;
+  #if (ESP_IDF_VERSION_MAJOR < 5)
+    // ESP-IDF v4 (对应 Arduino ESP32 v2.x)
+    res = f_mkfs(drv, FM_ANY, 0, workbuf, workbuf_size);
+  #else
+    // ESP-IDF v5 (对应 Arduino ESP32 v3.x)
+    const MKFS_PARM opt = {(BYTE)FM_ANY, 0, 0, 0, 0};
+    res = f_mkfs(drv, &opt, workbuf, workbuf_size);
+  #endif
+
+  free(workbuf);
+
+  if (res != FR_OK) {
+    DEBUG_PRINTF("❌ TF 卡格式化失败，FatFs 错误码: %d\n", res);
+    return false;
+  }
+  
+  DEBUG_PRINTLN("⚠️ TF 卡格式化成功！请及时在 Storage.cpp 中注释掉 #define FORCE_FORMAT_SD 并重新烧录，防止每次启动都进行格式化！");
+  return true;
 }
 
 bool Storage::loadConfig(DeviceConfig& config) {

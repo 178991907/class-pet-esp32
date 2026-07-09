@@ -26,6 +26,8 @@ public:
   void showTomatoScreen(int remainingSec, int percent, bool isPaused);
   void showProcessingScreen(const String& statusText);
   void showRecordingScreen(int volumeDb);
+  void showTomatoSettings();
+  uint32_t getSelectedTomatoTime();
   
   void showToast(const String& message, int duration_ms = 3000);
 
@@ -35,10 +37,11 @@ public:
   private:
   ClassPetUI() : 
     _scr_normal(nullptr), _scr_diag(nullptr), _scr_tomato(nullptr), _scr_processing(nullptr),
+    _scr_menu(nullptr), _scr_standby(nullptr),
     _card_normal(nullptr),
     _lbl_normal_wifi(nullptr), _lbl_normal_battery(nullptr), _bar_battery(nullptr), _lbl_normal_name(nullptr), _lbl_normal_lv(nullptr), 
     _bar_normal_exp(nullptr), _lbl_normal_exp(nullptr),
-    _lbl_time(nullptr), _lbl_date(nullptr), _drawer(nullptr), _drawer_is_open(false),
+    _lbl_time(nullptr), _lbl_date(nullptr), _lbl_standby_time(nullptr), _lbl_standby_date(nullptr),
     _lbl_diag_wifi(nullptr), _lbl_diag_ip(nullptr), _lbl_diag_domain(nullptr), _lbl_diag_resolved(nullptr),
     _lbl_diag_http(nullptr), _lbl_diag_tls(nullptr), _lbl_diag_sugg(nullptr), _lbl_diag_mac(nullptr),
     _lbl_tomato_time(nullptr), _arc_tomato_progress(nullptr), _lbl_tomato_status(nullptr),
@@ -50,6 +53,8 @@ public:
   lv_obj_t* _scr_diag;
   lv_obj_t* _scr_tomato;
   lv_obj_t* _scr_processing;
+  lv_obj_t* _scr_menu;
+  lv_obj_t* _scr_standby;
   
   // 主界面控件
   lv_obj_t* _card_normal;
@@ -62,8 +67,8 @@ public:
   lv_obj_t* _lbl_normal_exp;
   lv_obj_t* _lbl_time;
   lv_obj_t* _lbl_date;
-  lv_obj_t* _drawer;
-  bool _drawer_is_open;
+  lv_obj_t* _lbl_standby_time;
+  lv_obj_t* _lbl_standby_date;
   
   lv_obj_t* _gif_pet;
   lv_image_dsc_t _gif_dsc; // LVGL 9 需要包装成 img_dsc
@@ -79,9 +84,15 @@ public:
   lv_obj_t* _lbl_diag_mac;
   
   // 番茄钟控件
+  lv_obj_t* _cont_tomato_settings;
+  lv_obj_t* _cont_tomato_timer;
+  lv_obj_t* _roller_tomato_time;
   lv_obj_t* _lbl_tomato_time;
   lv_obj_t* _arc_tomato_progress;
   lv_obj_t* _lbl_tomato_status;
+
+  lv_image_dsc_t _gif_tomato_dsc;
+
   
   // 进度/录音界面控件
   lv_obj_t* _lbl_proc_text;
@@ -95,13 +106,12 @@ public:
   void initDiagScreen();
   void initTomatoScreen();
   void initProcessingScreen();
+  void initMenuScreen();
+  void initStandbyScreen();
   
   // 内部辅助
   static void toastTimerCb(lv_timer_t* timer);
-  static void drawer_anim_cb(void* var, int32_t v);
   static void gesture_event_cb(lv_event_t* e);
-  static void btn_toggle_drawer_cb(lv_event_t* e);
-  void toggleDrawer();
   
   // 统一界面跳转
   void loadScreen(lv_obj_t* scr);

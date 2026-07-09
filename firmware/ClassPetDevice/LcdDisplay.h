@@ -27,6 +27,7 @@ public:
   
   // 通知有新活动，唤醒屏幕
   void resetActivityTime();
+  unsigned long getLastActivityTime() const { return _last_activity_time; }
 
   // LVGL 互斥锁：多核访问保护
   void lock()   { if (_lvgl_mutex) xSemaphoreTake(_lvgl_mutex, portMAX_DELAY); }

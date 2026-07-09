@@ -5,24 +5,120 @@
  */
 
 #include "ApiClient.h"
+#include <ArduinoJson.h>
+#include <SD_MMC.h>
 #include "Network.h"
 #include "Config.h"
+#if defined(ESP8266)
+  #include <ESP8266HTTPClient.h>
+  #include <WiFiClient.h>
+#else
+  #include <HTTPClient.h>
+  #include <WiFiClientSecure.h>
+#endif
 #include <ArduinoJson.h>
 #include <mbedtls/md.h>
 
 // 静态成员变量实例化
 String ApiClient::server_url = "";
+String ApiClient::api_prefix = "/pet-garden/api";
 String ApiClient::device_secret = "";
+String ApiClient::proxy_ip = "";
+DiagnosticInfo lastDiagnostic = {false, "", "", "", 0, 0, ""};
 
-void ApiClient::init(const String& serverUrl, const String& secret) {
+#if !defined(ESP8266)
+class ProxyWiFiClientSecure : public WiFiClientSecure {
+public:
+  int connect(const char *host, uint16_t port) override {
+    String proxy = ApiClient::getProxyIp();
+    if (proxy.length() > 0) {
+      IPAddress ip;
+      if (ip.fromString(proxy)) {
+        DEBUG_PRINTF("🛡️ [Proxy] 拦截请求 %s -> 连接优选 IP: %s (SNI: %s)\n", host, proxy.c_str(), host);
+        return WiFiClientSecure::connect(ip, port, host, NULL, NULL, NULL);
+      } else {
+        if (WiFi.hostByName(proxy.c_str(), ip)) {
+          DEBUG_PRINTF("🛡️ [Proxy] 拦截请求 %s -> 解析优选域名 %s 为 IP: %s (SNI: %s)\n", host, proxy.c_str(), ip.toString().c_str(), host);
+          return WiFiClientSecure::connect(ip, port, host, NULL, NULL, NULL);
+        } else {
+          DEBUG_PRINTF("🛡️ [Proxy] 警告: 优选域名 %s 解析失败，降级直连\n", proxy.c_str());
+        }
+      }
+    }
+    return WiFiClientSecure::connect(host, port);
+  }
+
+  int connect(const char *host, uint16_t port, int32_t timeout) override {
+    String proxy = ApiClient::getProxyIp();
+    if (proxy.length() > 0) {
+      IPAddress ip;
+      if (ip.fromString(proxy)) {
+        DEBUG_PRINTF("🛡️ [Proxy] 拦截请求 %s -> 连接优选 IP: %s (SNI: %s)\n", host, proxy.c_str(), host);
+        return WiFiClientSecure::connect(ip, port, host, NULL, NULL, NULL);
+      } else {
+        if (WiFi.hostByName(proxy.c_str(), ip)) {
+          DEBUG_PRINTF("🛡️ [Proxy] 拦截请求 %s -> 解析优选域名 %s 为 IP: %s (SNI: %s)\n", host, proxy.c_str(), ip.toString().c_str(), host);
+          return WiFiClientSecure::connect(ip, port, host, NULL, NULL, NULL);
+        } else {
+          DEBUG_PRINTF("🛡️ [Proxy] 警告: 优选域名 %s 解析失败，降级直连\n", proxy.c_str());
+        }
+      }
+    }
+    return WiFiClientSecure::connect(host, port, timeout);
+  }
+};
+
+  static ProxyWiFiClientSecure secureClient;
+  static WiFiClient plainClient;
+#endif
+static HTTPClient httpClient;
+static bool clientsInitialized = false;
+
+void ApiClient::init(const String& serverUrl, const String& secret, const String& proxyIp) {
   server_url = serverUrl;
   device_secret = secret;
+  proxy_ip = proxyIp;
+  
+  #if !defined(ESP8266)
+    secureClient.setInsecure();
+    secureClient.setTimeout(10000); // 10秒超时，防握手死锁
+  #endif
+  plainClient.setTimeout(10000);
+  clientsInitialized = true;
+
   // 移除尾部斜杠
   if (server_url.endsWith("/")) {
     server_url = server_url.substring(0, server_url.length() - 1);
   }
+
+  // 兼容三种填写方式：
+  // 1. https://xxx.vercel.app -> 自动走 /pet-garden/api
+  // 2. https://xxx.vercel.app/pet-garden -> 走 /api
+  // 3. https://xxx.vercel.app/api -> 直接走 /api
+  api_prefix = "/pet-garden/api";
+  if (server_url.endsWith("/pet-garden")) {
+    api_prefix = "/api";
+  } else if (server_url.endsWith("/api")) {
+    server_url = server_url.substring(0, server_url.length() - 4);
+    api_prefix = "/api";
+  }
   
-  DEBUG_PRINTF("🚀 API 客户端就绪。指向 URL: %s\n", server_url.c_str());
+  DEBUG_PRINTF("🚀 API 客户端就绪。指向 URL: %s%s\n", server_url.c_str(), api_prefix.c_str());
+}
+
+static void initDefaultStatusResponse(DeviceStatusResponse& res) {
+  res.success = false;
+  res.status = "error";
+  res.student_name = "未绑定";
+  res.class_name = "";
+  res.total_points = 0;
+  res.pet_type = "";
+  res.pet_level = 1;
+  res.pet_exp = 0;
+  res.exp_progress = 0;
+  res.exp_required = 40;
+  res.is_max_level = false;
+  res.error_msg = "";
 }
 
 String ApiClient::calculateSignature(const String& timestamp, const String& requestBody) {
@@ -54,27 +150,28 @@ String ApiClient::calculateSignature(const String& timestamp, const String& requ
   return String(hexResult);
 }
 
-int ApiClient::sendRequest(HTTPClient& http, const String& method, const String& path, const String& body, String& response) {
+int ApiClient::sendRequest(const String& method, const String& path, const String& body, String& response) {
   if (!Network::isConnected()) {
     DEBUG_PRINTLN("❌ API 客户端错误: 网络未连接！");
     return -1;
   }
 
-  // 拼接完整 URL
-  String fullUrl = server_url + path;
+  // 拼接完整 URL。上层历史传入 /api/...，这里统一剥离为 endpoint。
+  String endpoint = path;
+  if (endpoint.startsWith("/api/")) {
+    endpoint = endpoint.substring(4);
+  }
+  String fullUrl = server_url + api_prefix + endpoint;
   
   // 决定使用安全 WiFi 还是普通 WiFi 客户端
   #if defined(ESP8266)
     WiFiClient client;
-    http.begin(client, fullUrl);
+    httpClient.begin(client, fullUrl);
   #else
     if (fullUrl.startsWith("https")) {
-      WiFiClientSecure* secureClient = new WiFiClientSecure();
-      secureClient->setInsecure(); // 忽略 SSL 证书签名校验，保障各种云部署域名直接跑通
-      http.begin(*secureClient, fullUrl);
+      httpClient.begin(secureClient, fullUrl);
     } else {
-      WiFiClient* client = new WiFiClient();
-      http.begin(*client, fullUrl);
+      httpClient.begin(plainClient, fullUrl);
     }
   #endif
 
@@ -90,54 +187,99 @@ int ApiClient::sendRequest(HTTPClient& http, const String& method, const String&
   String signature = calculateSignature(timestampStr, body);
 
   // 注入安全认证和通信状态 Header 头部
-  http.addHeader("X-Device-ID", Network::getMacAddress());
-  http.addHeader("X-Device-Timestamp", timestampStr);
-  http.addHeader("X-Device-Signature", signature);
-  http.addHeader("Content-Type", "application/json");
+  httpClient.setTimeout(8000);
+  httpClient.addHeader("X-Device-ID", Network::getMacAddress());
+  httpClient.addHeader("X-Device-Timestamp", timestampStr);
+  httpClient.addHeader("X-Device-Signature", signature);
+  httpClient.addHeader("Content-Type", "application/json");
 
   DEBUG_PRINTF("📤 发送 %s -> %s\n", method.c_str(), path.c_str());
   
+  // 记录基础诊断状态
+  lastDiagnostic.wifi_connected = Network::isConnected();
+  lastDiagnostic.local_ip = WiFi.localIP().toString();
+
   int httpCode = -1;
+  #if !defined(ESP8266)
+    String host = "";
+    int startIdx = fullUrl.indexOf("://");
+    if (startIdx >= 0) {
+      int endIdx = fullUrl.indexOf("/", startIdx + 3);
+      host = (endIdx >= 0) ? fullUrl.substring(startIdx + 3, endIdx) : fullUrl.substring(startIdx + 3);
+    }
+    int colonIdx = host.indexOf(":");
+    if (colonIdx >= 0) {
+      host = host.substring(0, colonIdx);
+    }
+    lastDiagnostic.server_domain = host;
+
+    IPAddress remote_ip;
+    if (WiFi.hostByName(host.c_str(), remote_ip)) {
+      DEBUG_PRINTF("🔍 [DNS] 域名 %s 解析为 IP: %s\n", host.c_str(), remote_ip.toString().c_str());
+      lastDiagnostic.host_resolved_ip = remote_ip.toString();
+    } else {
+      DEBUG_PRINTF("🔍 [DNS] 域名 %s 解析失败！\n", host.c_str());
+      lastDiagnostic.host_resolved_ip = "DNS Failed";
+    }
+    DEBUG_PRINTF("🧠 [内存] 准备请求时内存: free=%u max_alloc=%u\n", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+  #endif
+
   if (method == "GET") {
-    httpCode = http.GET();
+    httpCode = httpClient.GET();
   } else if (method == "POST") {
-    httpCode = http.POST(body);
+    httpCode = httpClient.POST(body);
   }
 
+  lastDiagnostic.http_code = httpCode;
   if (httpCode > 0) {
-    response = http.getString();
+    response = httpClient.getString();
     DEBUG_PRINTF("📥 响应代码 [%d]\n", httpCode);
+    lastDiagnostic.tls_error_code = 0;
+    lastDiagnostic.tls_error_msg = "OK";
   } else {
-    DEBUG_PRINTF("❌ 请求失败。错误码 / 原因: %s\n", http.errorToString(httpCode).c_str());
+    DEBUG_PRINTF("❌ 请求失败。错误码 / 原因: %s\n", httpClient.errorToString(httpCode).c_str());
+    #if !defined(ESP8266)
+      if (fullUrl.startsWith("https")) {
+        char err_buf[128];
+        int err = secureClient.lastError(err_buf, sizeof(err_buf));
+        lastDiagnostic.tls_error_code = err;
+        lastDiagnostic.tls_error_msg = String(err_buf);
+        DEBUG_PRINTF("🔒 [TLS 错误详情] %s\n", err_buf);
+      } else {
+        lastDiagnostic.tls_error_code = 0;
+        lastDiagnostic.tls_error_msg = "No SecureClient";
+      }
+    #else
+      lastDiagnostic.tls_error_code = 0;
+      lastDiagnostic.tls_error_msg = "ESP8266 TLS";
+    #endif
   }
   
-  http.end();
+  httpClient.end();
   return httpCode;
 }
 
-DeviceStatusResponse ApiClient::getStatus() {
-  DeviceStatusResponse res;
-  res.success = false;
+void ApiClient::getStatus(DeviceStatusResponse& res) {
+  initDefaultStatusResponse(res);
   
-  HTTPClient http;
   String responseStr;
   
   // 查询路径加上 query 参数
   String path = "/api/device/status?device_id=" + Network::getMacAddress();
-  int code = sendRequest(http, "GET", path, "", responseStr);
+  int code = sendRequest("GET", path, "", responseStr);
   
   if (code != 200) {
     res.error_msg = "服务器返回错误: " + String(code);
-    return res;
+    return;
   }
 
   // 使用 ArduinoJson 反序列化
-  StaticJsonDocument<1024> doc;
+  DynamicJsonDocument doc(1024);
   DeserializationError error = deserializeJson(doc, responseStr);
   
   if (error) {
     res.error_msg = "JSON 解析失败: " + String(error.c_str());
-    return res;
+    return;
   }
 
   String status = doc["status"].as<String>();
@@ -146,8 +288,14 @@ DeviceStatusResponse ApiClient::getStatus() {
   if (status == "unbound") {
     res.success = true;
     res.student_name = "未绑定";
+    res.total_points = 0;
+    res.pet_level = 1;
+    res.pet_exp = 0;
+    res.exp_progress = 0;
+    res.exp_required = 40;
+    res.is_max_level = false;
     res.error_msg = doc["message"].as<String>();
-    return res;
+    return;
   }
 
   if (status == "ok") {
@@ -165,15 +313,15 @@ DeviceStatusResponse ApiClient::getStatus() {
   } else {
     res.error_msg = "未知状态: " + status;
   }
-
-  return res;
 }
 
-VoiceActionResponse ApiClient::postVoiceText(const String& text) {
-  VoiceActionResponse res;
+void ApiClient::postVoiceText(const String& text, VoiceActionResponse& res) {
   res.success = false;
+  res.action = "none";
+  res.reply_text = "";
+  res.audio_url = "";
+  res.error_msg = "";
   
-  HTTPClient http;
   String responseStr;
   
   // 封装为 JSON
@@ -182,20 +330,20 @@ VoiceActionResponse ApiClient::postVoiceText(const String& text) {
   String reqBody;
   serializeJson(reqDoc, reqBody);
   
-  int code = sendRequest(http, "POST", "/api/device/voice", reqBody, responseStr);
+  int code = sendRequest("POST", "/api/device/voice", reqBody, responseStr);
   
   if (code != 200) {
     res.error_msg = "语音提交失败，错误代码: " + String(code);
-    return res;
+    return;
   }
 
   // 反序列化结果
-  StaticJsonDocument<512> doc;
+  DynamicJsonDocument doc(512);
   DeserializationError error = deserializeJson(doc, responseStr);
   
   if (error) {
     res.error_msg = "响应 JSON 解析失败";
-    return res;
+    return;
   }
 
   res.success = true;
@@ -205,12 +353,9 @@ VoiceActionResponse ApiClient::postVoiceText(const String& text) {
   if (doc.containsKey("audio_url")) {
     res.audio_url = doc["audio_url"].as<String>();
   }
-  
-  return res;
 }
 
 bool ApiClient::reportOfflineTask(const String& taskName, int points, uint32_t timestamp) {
-  HTTPClient http;
   String responseStr;
   
   StaticJsonDocument<256> reqDoc;
@@ -219,7 +364,7 @@ bool ApiClient::reportOfflineTask(const String& taskName, int points, uint32_t t
   String reqBody;
   serializeJson(reqDoc, reqBody);
   
-  int code = sendRequest(http, "POST", "/api/device/voice", reqBody, responseStr);
+  int code = sendRequest("POST", "/api/device/voice", reqBody, responseStr);
   
   if (code == 200) {
     StaticJsonDocument<256> doc;
@@ -233,7 +378,6 @@ bool ApiClient::reportOfflineTask(const String& taskName, int points, uint32_t t
 }
 
 bool ApiClient::sendHeartbeat(int batteryLevel, bool isCharging) {
-  HTTPClient http;
   String responseStr;
   
   StaticJsonDocument<128> reqDoc;
@@ -243,6 +387,174 @@ bool ApiClient::sendHeartbeat(int batteryLevel, bool isCharging) {
   String reqBody;
   serializeJson(reqDoc, reqBody);
   
-  int code = sendRequest(http, "POST", "/api/device/heartbeat", reqBody, responseStr);
+  int code = sendRequest("POST", "/api/device/heartbeat", reqBody, responseStr);
   return (code == 200);
+}
+
+#include <SD_MMC.h>
+
+bool ApiClient::downloadAsset(const String& petType, int petLevel) {
+  if (petType.isEmpty()) return false;
+  
+  // 版本号与 DeviceStateMachine::loadPetGif 保持一致
+  String filename = "/" + petType + "_" + String(petLevel) + "_v4.gif";
+  if (SD_MMC.exists(filename)) {
+    // 已经存在，无需下载
+    return true;
+  }
+  
+  if (WiFi.status() != WL_CONNECTED) return false;
+  
+  // 使用配置 of server_url（域名）下载 GIF 素材
+  // Vercel 部署后，public/pets/ 下的文件会被映射到根路径 /pets/
+  // 本地 Node 服务器也配置了 app.use('/pets', ...) 路由
+  String baseUrl = server_url;
+  // 确保 baseUrl 不以 / 结尾
+  if (baseUrl.endsWith("/")) baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
+  // 如果 server_url 包含 /pet-garden，则剥除该后缀（因为静态文件不走 /pet-garden 前缀）
+  if (baseUrl.endsWith("/pet-garden")) {
+    baseUrl = baseUrl.substring(0, baseUrl.length() - 11);
+  }
+  String targetUrl = baseUrl + "/pets/" + petType + "/lv" + String(petLevel) + ".gif";
+  
+  DEBUG_PRINTF("🌐 开始下载宠物素材: %s\n", targetUrl.c_str());
+  
+  HTTPClient http;
+  http.setReuse(false);
+  http.setTimeout(15000); // 15秒超时，给 TLS 握手留足时间
+  
+  // 已经移至 ApiClient::init 进行全局初始化
+  
+  if (targetUrl.startsWith("https")) {
+    http.begin(secureClient, targetUrl); // HTTPS 必须使用 secureClient
+  } else {
+    http.begin(plainClient, targetUrl);
+  }
+  
+  // 收集响应头（ESP32 默认不收集，不调用这个则 http.header() 永远返回空）
+  const char* headerKeys[] = {"Content-Type"};
+  http.collectHeaders(headerKeys, 1);
+  
+  int httpCode = http.GET();
+  DEBUG_PRINTF("📦 素材下载 HTTP 响应码: %d\n", httpCode);
+  if (httpCode == HTTP_CODE_OK) {
+    // 校验 content-type，防止 SPA 路由返回 HTML 而非真正的图片
+    String contentType = http.header("Content-Type");
+    DEBUG_PRINTF("📦 素材 Content-Type: %s\n", contentType.c_str());
+    if (contentType.length() > 0 && contentType.indexOf("image") < 0 && contentType.indexOf("octet") < 0) {
+      DEBUG_PRINTF("❌ 素材下载返回了错误的类型: %s（不是图片）\n", contentType.c_str());
+      http.end();
+      return false;
+    }
+    
+    int size = http.getSize();
+    WiFiClient* stream = http.getStreamPtr();
+    
+    fs::File f = SD_MMC.open(filename, "w");
+    if (!f) {
+      DEBUG_PRINTLN("❌ 无法创建本地文件保存素材");
+      http.end();
+      return false;
+    }
+    
+    uint8_t buff[512];
+    int written = 0;
+    
+    while (http.connected() && (size > 0 || size == -1)) {
+      int toRead = (size > 0 && size < (int)sizeof(buff)) ? size : (int)sizeof(buff);
+      int c = stream->readBytes(buff, toRead);
+      if (c > 0) {
+        f.write(buff, c);
+        written += c;
+        if (size > 0) {
+          size -= c;
+        }
+      } else {
+        // readBytes 返回 0 代表数据读取完毕或连接断开超时
+        break;
+      }
+    }
+    
+    f.close();
+    http.end();
+    
+    if (written > 0) {
+      DEBUG_PRINTF("✅ 素材下载并保存成功，大小: %d 字节\n", written);
+      return true;
+    } else {
+      DEBUG_PRINTLN("❌ 素材写入文件失败");
+      return false;
+    }
+  } else {
+    DEBUG_PRINTF("❌ 素材下载失败，HTTP 状态码: %d\n", httpCode);
+    http.end();
+    return false;
+  }
+}
+void ApiClient::postVoiceAudio(const String& filePath, VoiceActionResponse& res) {
+  res.success = false;
+  res.action = "none";
+  res.reply_text = "";
+  res.audio_url = "";
+  res.error_msg = "";
+
+  File file = SD_MMC.open(filePath, FILE_READ);
+  if (!file) {
+    res.error_msg = "SD卡无法打开音频文件";
+    return;
+  }
+  
+  size_t fileSize = file.size();
+  
+  String boundary = "----ClassPetAudioBoundary";
+  String head = "--" + boundary + "\r\n"
+              + "Content-Disposition: form-data; name=\"audio\"; filename=\"record.wav\"\r\n"
+              + "Content-Type: audio/wav\r\n\r\n";
+  String tail = "\r\n--" + boundary + "--\r\n";
+  
+  size_t totalLen = head.length() + fileSize + tail.length();
+  uint8_t* payload = (uint8_t*)ps_malloc(totalLen);
+  if (!payload) {
+    res.error_msg = "PSRAM内存不足，无法打包音频";
+    file.close();
+    return;
+  }
+  
+  memcpy(payload, head.c_str(), head.length());
+  file.read(payload + head.length(), fileSize);
+  memcpy(payload + head.length() + fileSize, tail.c_str(), tail.length());
+  file.close();
+
+  HTTPClient http;
+  String url = server_url + api_prefix + "/voice";
+  http.begin(url);
+  http.setTimeout(25000); // 语音识别可能较慢
+  http.addHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
+  
+  String ts = String(Network::getUnixTimestamp());
+  http.addHeader("X-Device-ID", WiFi.macAddress());
+  http.addHeader("X-Device-Timestamp", ts);
+  http.addHeader("X-Device-Signature", calculateSignature(ts, ""));
+
+  int code = http.sendRequest("POST", payload, totalLen);
+  free(payload);
+  
+  if (code != 200) {
+    res.error_msg = "语音上传失败，错误代码: " + String(code);
+    return;
+  }
+
+  String responseStr = http.getString();
+  DynamicJsonDocument doc(512);
+  DeserializationError error = deserializeJson(doc, responseStr);
+  
+  if (error) {
+    res.error_msg = "响应 JSON 解析失败";
+    return;
+  }
+
+  res.success = true;
+  res.action = doc["action"].as<String>();
+  res.reply_text = doc["reply_text"].as<String>();
+  if (doc.containsKey("audio_url")) res.audio_url = doc["audio_url"].as<String>();
 }

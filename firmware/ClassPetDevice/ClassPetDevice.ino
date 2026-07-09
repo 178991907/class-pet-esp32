@@ -102,9 +102,13 @@ void onPomodoroFinished() {
   // 2. 屏幕字幕闪烁提示
   ClassPetUI::getInstance().showToast("专注结束！+2积分已存入暂存队列", 5000);
 
-  // （临时移除本地铃声播放，因为假域名会导致 DNS 阻塞 15 秒）
-  // audio->playAudioStream("http://local-spiffs/ringtone.mp3");
-  DeviceStateMachine::getInstance().postEvent(EVENT_VOICE_PLAY_DONE); // 用语音播完事件切回正常态
+  extern AudioHAL* audio;
+  if (audio) {
+    String ringtoneUrl = String(deviceConfig.server_url) + "/audio/ringtone.wav";
+    audio->playAudioStream(ringtoneUrl);
+  }
+
+  DeviceStateMachine::getInstance().postEvent(EVENT_POMODORO_STOP); // 切回正常态
 }
 
 // ==========================================

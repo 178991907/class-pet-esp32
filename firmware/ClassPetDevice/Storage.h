@@ -43,6 +43,8 @@ public:
   static bool peekOfflineTask(OfflineTask& task); // 仅读取队列头部元素
   static void clearOfflineQueue();
 
+  static bool formatSDCard();
+
 private:
   static const int EEPROM_SIZE = 2048; // 分配 2048 字节存储空间（需容纳配置+20条离线任务队列）
   

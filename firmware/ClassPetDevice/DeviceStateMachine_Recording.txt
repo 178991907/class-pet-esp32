@@ -1,0 +1,44 @@
+    case STATE_RECORDING: {
+      audio->startRecording();
+      uint32_t recordStart = millis();
+      // 等待按键释放或超时 (10秒)
+      while (digitalRead(PHYSICAL_KEY_PIN) == LOW && (millis() - recordStart < 10000)) {
+        LVGL_LOCK();
+        ClassPetUI::getInstance().showRecordingScreen(audio->getRecordVolumeDb());
+        LVGL_UNLOCK();
+        vTaskDelay(pdMS_TO_TICKS(100));
+      }
+      postEvent(EVENT_VOICE_RECORD_DONE);
+      break;
+    }
+    
+    case STATE_PROCESSING: {
+      LVGL_LOCK();
+      ClassPetUI::getInstance().showProcessingScreen("识别中...");
+      LVGL_UNLOCK();
+      
+      uint8_t* wavBuf = nullptr;
+      size_t wavSize = 0;
+      audio->stopRecording(wavBuf, wavSize);
+      
+      VoiceActionResponse res;
+      ApiClient::postVoiceAudio("/record.wav", res);
+      
+      if (res.success) {
+        LVGL_LOCK();
+        ClassPetUI::getInstance().showToast(res.reply_text, 4000);
+        LVGL_UNLOCK();
+        if (res.audio_url.length() > 0) {
+          audio->playAudioStream(res.audio_url);
+          _state = STATE_PLAYING_AUDIO;
+        } else {
+          _state = STATE_NORMAL_ONLINE;
+        }
+      } else {
+        LVGL_LOCK();
+        ClassPetUI::getInstance().showToast(res.error_msg.c_str(), 3000);
+        LVGL_UNLOCK();
+        _state = STATE_NORMAL_ONLINE;
+      }
+      break;
+    }

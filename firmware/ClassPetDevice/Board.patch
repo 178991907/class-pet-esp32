@@ -1,0 +1,27 @@
+--- firmware/ClassPetDevice/Board.h
++++ firmware/ClassPetDevice/Board.h
+@@ -28,9 +28,7 @@
+ // ==========================================
+-// 5. TF卡 (SD SPI) 扩展存储
++// 5. TF卡 (SDIO) 扩展存储
+ // ==========================================
+-#ifndef SD_CS_PIN
+-#define SD_CS_PIN              10   // TF 卡 SPI CS (片选) 引脚，若不符请修改
+-#endif
++// 液晶板自带 TF 槽，采用 SD_MMC SDIO 模式 (CLK=38, CMD=40, D0=39)，不再使用独立 SPI CS。
+ 
+ // ==========================================
+ // 6. 音频输入引脚配置 (I2S 麦克风)
+ // ==========================================
+ #ifndef I2S_MIC_SCK_PIN
+-#define I2S_MIC_SCK_PIN        41   // 麦克风 I2S SCK / BCLK
++#define I2S_MIC_SCK_PIN        43   // 麦克风 I2S SCK / BCLK
+ #endif
+ #ifndef I2S_MIC_WS_PIN
+-#define I2S_MIC_WS_PIN         42   // 麦克风 I2S WS / LRC
++#define I2S_MIC_WS_PIN         44   // 麦克风 I2S WS / LRC
+ #endif
+ #ifndef I2S_MIC_SD_PIN
+-#define I2S_MIC_SD_PIN         2    // 麦克风 I2S SD / DIN
++#define I2S_MIC_SD_PIN         14   // 麦克风 I2S SD / DIN
+ #endif

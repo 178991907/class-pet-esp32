@@ -4,6 +4,8 @@
  */
 
 #include "ApiClient.h"
+#include <ArduinoJson.h>
+#include <SD_MMC.h>
 #include "Network.h"
 #include "Config.h"
 #if defined(ESP8266)
@@ -75,6 +77,14 @@ void ApiClient::init(const String& serverUrl, const String& secret, const String
   server_url = serverUrl;
   device_secret = secret;
   proxy_ip = proxyIp;
+  
+  #if !defined(ESP8266)
+    secureClient.setInsecure();
+    secureClient.setTimeout(10000); // 10秒超时，防握手死锁
+  #endif
+  plainClient.setTimeout(10000);
+  clientsInitialized = true;
+
   // 移除尾部斜杠
   if (server_url.endsWith("/")) {
     server_url = server_url.substring(0, server_url.length() - 1);
@@ -152,13 +162,6 @@ int ApiClient::sendRequest(const String& method, const String& path, const Strin
   }
   String fullUrl = server_url + api_prefix + endpoint;
   
-  if (!clientsInitialized) {
-    #if !defined(ESP8266)
-      secureClient.setInsecure(); // 忽略 SSL 证书签名校验，保障各种云部署域名直接跑通
-    #endif
-    clientsInitialized = true;
-  }
-
   // 决定使用安全 WiFi 还是普通 WiFi 客户端
   #if defined(ESP8266)
     WiFiClient client;
@@ -387,21 +390,21 @@ bool ApiClient::sendHeartbeat(int batteryLevel, bool isCharging) {
   return (code == 200);
 }
 
-#include <FFat.h>
+#include <SD_MMC.h>
 
 bool ApiClient::downloadAsset(const String& petType, int petLevel) {
   if (petType.isEmpty()) return false;
   
   // 版本号与 DeviceStateMachine::loadPetGif 保持一致
   String filename = "/" + petType + "_" + String(petLevel) + "_v4.gif";
-  if (FFat.exists(filename)) {
+  if (SD_MMC.exists(filename)) {
     // 已经存在，无需下载
     return true;
   }
   
   if (WiFi.status() != WL_CONNECTED) return false;
   
-  // 使用配置的 server_url（域名）下载 GIF 素材
+  // 使用配置 of server_url（域名）下载 GIF 素材
   // Vercel 部署后，public/pets/ 下的文件会被映射到根路径 /pets/
   // 本地 Node 服务器也配置了 app.use('/pets', ...) 路由
   String baseUrl = server_url;
@@ -419,13 +422,7 @@ bool ApiClient::downloadAsset(const String& petType, int petLevel) {
   http.setReuse(false);
   http.setTimeout(15000); // 15秒超时，给 TLS 握手留足时间
   
-  // 复用已初始化的 secureClient / plainClient，确保 HTTPS 能正常握手
-  if (!clientsInitialized) {
-    #if !defined(ESP8266)
-      secureClient.setInsecure(); // 忽略 SSL 证书校验
-    #endif
-    clientsInitialized = true;
-  }
+  // 已经移至 ApiClient::init 进行全局初始化
   
   if (targetUrl.startsWith("https")) {
     http.begin(secureClient, targetUrl); // HTTPS 必须使用 secureClient
@@ -449,10 +446,10 @@ bool ApiClient::downloadAsset(const String& petType, int petLevel) {
       return false;
     }
     
-    int len = http.getSize();
+    int size = http.getSize();
     WiFiClient* stream = http.getStreamPtr();
     
-    fs::File f = FFat.open(filename, "w");
+    fs::File f = SD_MMC.open(filename, "w");
     if (!f) {
       DEBUG_PRINTLN("❌ 无法创建本地文件保存素材");
       http.end();
@@ -460,25 +457,104 @@ bool ApiClient::downloadAsset(const String& petType, int petLevel) {
     }
     
     uint8_t buff[512];
-    while(http.connected() && (len > 0 || len == -1)) {
-      size_t size = stream->available();
-      if(size) {
-        int c = stream->readBytes(buff, ((size > sizeof(buff)) ? sizeof(buff) : size));
+    int written = 0;
+    
+    while (http.connected() && (size > 0 || size == -1)) {
+      int toRead = (size > 0 && size < (int)sizeof(buff)) ? size : (int)sizeof(buff);
+      int c = stream->readBytes(buff, toRead);
+      if (c > 0) {
         f.write(buff, c);
-        if(len > 0) {
-          len -= c;
+        written += c;
+        if (size > 0) {
+          size -= c;
         }
+      } else {
+        // readBytes 返回 0 代表数据读取完毕或连接断开超时
+        break;
       }
-      delay(1);
     }
     
     f.close();
     http.end();
-    DEBUG_PRINTLN("✅ 素材下载并保存成功!");
-    return true;
+    
+    if (written > 0) {
+      DEBUG_PRINTF("✅ 素材下载并保存成功，大小: %d 字节\n", written);
+      return true;
+    } else {
+      DEBUG_PRINTLN("❌ 素材写入文件失败");
+      return false;
+    }
   } else {
     DEBUG_PRINTF("❌ 素材下载失败，HTTP 状态码: %d\n", httpCode);
     http.end();
     return false;
   }
+}
+void ApiClient::postVoiceAudio(const String& filePath, VoiceActionResponse& res) {
+  res.success = false;
+  res.action = "none";
+  res.reply_text = "";
+  res.audio_url = "";
+  res.error_msg = "";
+
+  File file = SD_MMC.open(filePath, FILE_READ);
+  if (!file) {
+    res.error_msg = "SD卡无法打开音频文件";
+    return;
+  }
+  
+  size_t fileSize = file.size();
+  
+  uint8_t* payload = (uint8_t*)ps_malloc(fileSize);
+  if (!payload) {
+    res.error_msg = "PSRAM内存不足，无法打包音频";
+    file.close();
+    return;
+  }
+  
+  file.read(payload, fileSize);
+  file.close();
+
+  HTTPClient http;
+  String url = server_url + api_prefix + "/device/voice";
+  
+  #if defined(ESP8266)
+    WiFiClient client;
+    http.begin(client, url);
+  #else
+    if (url.startsWith("https")) {
+      http.begin(secureClient, url);
+    } else {
+      http.begin(plainClient, url);
+    }
+  #endif
+  http.setTimeout(25000); // 语音识别可能较慢
+  http.addHeader("Content-Type", "audio/wav");
+  
+  String ts = String(Network::getUnixTimestamp());
+  http.addHeader("X-Device-ID", WiFi.macAddress());
+  http.addHeader("X-Device-Timestamp", ts);
+  http.addHeader("X-Device-Signature", calculateSignature(ts, ""));
+
+  int code = http.sendRequest("POST", payload, fileSize);
+  free(payload);
+  
+  if (code != 200) {
+    res.error_msg = "语音上传失败，错误代码: " + String(code);
+    return;
+  }
+
+  String responseStr = http.getString();
+  DynamicJsonDocument doc(512);
+  DeserializationError error = deserializeJson(doc, responseStr);
+  
+  if (error) {
+    res.error_msg = "响应 JSON 解析失败";
+    return;
+  }
+
+  res.success = true;
+  res.action = doc["action"].as<String>();
+  res.reply_text = doc["reply_text"].as<String>();
+  if (doc.containsKey("audio_url")) res.audio_url = doc["audio_url"].as<String>();
 }

@@ -221,7 +221,7 @@ function getLevelProgress(exp) {
 import express from 'express'
 
 // 通用语音接收与智能核销路由
-router.post('/voice', deviceAuthMiddleware, express.raw({ type: 'audio/wav', limit: '10mb' }), upload.single('audio'), async (req, res) => {
+router.post('/voice', deviceAuthMiddleware, express.raw({ type: '*/*', limit: '10mb' }), upload.single('audio'), async (req, res) => {
   let { text } = req.body || {}
   const deviceId = req.deviceId
   
@@ -233,6 +233,24 @@ router.post('/voice', deviceAuthMiddleware, express.raw({ type: 'audio/wav', lim
   }
 
   try {
+    // 1. 验证设备是否绑定
+    const student = await getAsync(`
+      SELECT s.*, c.user_id
+      FROM students s
+      JOIN classes c ON s.class_id = c.id
+      WHERE UPPER(s.device_id) = UPPER(?)
+    `, deviceId)
+
+    if (student) {
+      unboundDevices.delete(deviceId)
+    } else {
+      return res.json({
+        action: 'none',
+        text: '未绑定',
+        reply_text: '设备尚未绑定学生，请先在后台完成绑定。'
+      })
+    }
+
     // 限频检查：5秒防刷
     const now = Date.now()
     const lastTime = lastVoiceRequestTimes.get(deviceId) || 0
@@ -282,21 +300,6 @@ router.post('/voice', deviceAuthMiddleware, express.raw({ type: 'audio/wav', lim
           reply_text: '抱歉，刚才没听清，请再说一遍。'
         })
       }
-    }
-
-    // 获取绑定设备的学生
-    const student = await getAsync(`
-      SELECT s.*, c.user_id
-      FROM students s
-      JOIN classes c ON s.class_id = c.id
-      WHERE UPPER(s.device_id) = UPPER(?)
-    `, deviceId)
-
-    if (!student) {
-      unboundDevices.set(deviceId, now)
-      return res.status(403).json({ error: '设备尚未绑定学生，无法执行操作', status: 'unbound' })
-    } else {
-      unboundDevices.delete(deviceId)
     }
 
     if (!text) {
@@ -391,8 +394,8 @@ router.post('/voice', deviceAuthMiddleware, express.raw({ type: 'audio/wav', lim
 
     res.json(responseData)
   } catch (error) {
-    console.error('语音路由执行失败:', error)
-    res.status(500).json({ error: '语音处理失败' })
+    console.error('语音路由执行失败:', error.stack || error)
+    res.status(500).json({ error: '语音处理失败', details: error.message })
   }
 })
 

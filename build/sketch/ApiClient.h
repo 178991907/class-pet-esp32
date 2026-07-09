@@ -18,6 +18,17 @@
   #include <WiFiClientSecure.h>
 #endif
 
+struct DiagnosticInfo {
+  bool wifi_connected;
+  String local_ip;
+  String server_domain;
+  String host_resolved_ip;
+  int http_code;
+  int tls_error_code;
+  String tls_error_msg;
+};
+extern DiagnosticInfo lastDiagnostic;
+
 // 解析状态返回的实体结构
 struct DeviceStatusResponse {
   bool success;
@@ -45,18 +56,28 @@ struct VoiceActionResponse {
 
 class ApiClient {
 public:
-  static void init(const String& serverUrl, const String& secret);
+  static void init(const String& serverUrl, const String& secret, const String& proxyIp = "");
+
+  static String getProxyIp() { return proxy_ip; }
+  static String getServerUrl() { return server_url; }
 
   // 1. 获取设备绑定的学生宠物状态
-  static DeviceStatusResponse getStatus();
+  static void getStatus(DeviceStatusResponse& res);
 
   // 2. 模拟语音文本指令交互（调试后门）
-  static VoiceActionResponse postVoiceText(const String& text);
+  static void postVoiceText(const String& text, VoiceActionResponse& res);
+
+  // 2.5 真实上传录音文件 (WAV格式) 并接收指令反馈
+  static void postVoiceAudio(const String& filePath, VoiceActionResponse& res);
+
 
   // 3. 补传一条离线任务申报
   static bool reportOfflineTask(const String& taskName, int points, uint32_t timestamp);
 
-  // 4. 上报电量与充电状态心跳
+  // 4. 下载资产 (如宠物 GIF) 到本地 LittleFS  // 素材同步功能
+  static bool downloadAsset(const String& petType, int petLevel);
+
+  // 5. 上报电量与充电状态心跳
   static bool sendHeartbeat(int batteryLevel, bool isCharging);
 
   // 5. 辅助函数：计算带时间戳的 HMAC-SHA256 签名，生成 Hex 字符串
@@ -64,10 +85,12 @@ public:
 
 private:
   static String server_url;
+  static String api_prefix;
   static String device_secret;
+  static String proxy_ip;
 
   // 通用的 HTTP 请求发送并注入 Headers 签名
-  static int sendRequest(HTTPClient& http, const String& method, const String& path, const String& body, String& response);
+  static int sendRequest(const String& method, const String& path, const String& body, String& response);
 };
 
 #endif // API_CLIENT_H

@@ -1,0 +1,30 @@
+/Users/Terry/Downloads/class-pet-main/build/libraries/lvgl/drivers/display/drm/lv_linux_drm.c.o: \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/drivers/display/drm/lv_linux_drm.c \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/drivers/display/drm/lv_linux_drm.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/drivers/display/drm/../../../display/lv_display.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/drivers/display/drm/../../../display/../misc/lv_types.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/drivers/display/drm/../../../display/../misc/../lv_conf_internal.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/drivers/display/drm/../../../display/../misc/../lv_conf_kconfig.h \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/tools/sdk/esp32s3/qio_opi/include/sdkconfig.h \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/tools/sdk/esp32s3/include/esp_common/include/esp_attr.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/drivers/display/drm/../../../display/../misc/../../../lv_conf.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/drivers/display/drm/../../../display/../misc/lv_timer.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/drivers/display/drm/../../../display/../misc/../tick/lv_tick.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/drivers/display/drm/../../../display/../misc/../tick/../lv_conf_internal.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/drivers/display/drm/../../../display/../misc/../tick/../misc/lv_types.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/drivers/display/drm/../../../display/../misc/lv_types.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/drivers/display/drm/../../../display/../misc/lv_ll.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/drivers/display/drm/../../../display/../misc/lv_event.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/drivers/display/drm/../../../display/../misc/lv_array.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/drivers/display/drm/../../../display/../misc/lv_color.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/drivers/display/drm/../../../display/../misc/lv_assert.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/drivers/display/drm/../../../display/../misc/lv_log.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/drivers/display/drm/../../../display/../misc/../stdlib/lv_mem.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/drivers/display/drm/../../../display/../misc/../stdlib/../lv_conf_internal.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/drivers/display/drm/../../../display/../misc/../stdlib/lv_string.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/drivers/display/drm/../../../display/../misc/../stdlib/../misc/lv_types.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/drivers/display/drm/../../../display/../misc/lv_math.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/drivers/display/drm/../../../display/../misc/lv_palette.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/drivers/display/drm/../../../display/../misc/lv_color.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/drivers/display/drm/../../../display/../misc/lv_color_op.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/drivers/display/drm/../../../display/../misc/lv_area.h

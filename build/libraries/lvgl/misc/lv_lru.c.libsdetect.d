@@ -1,0 +1,16 @@
+lv_lru.o: /Users/Terry/Documents/Arduino/libraries/lvgl/src/misc/lv_lru.c \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/misc/lv_lru.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/misc/../lv_conf_internal.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/misc/../lv_conf_kconfig.h \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/tools/sdk/esp32s3/qio_opi/include/sdkconfig.h \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/tools/sdk/esp32s3/include/esp_common/include/esp_attr.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/misc/../../../lv_conf.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/misc/lv_types.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/misc/lv_math.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/misc/../stdlib/lv_mem.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/misc/../stdlib/../lv_conf_internal.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/misc/../stdlib/lv_string.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/misc/../stdlib/../misc/lv_types.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/misc/../stdlib/lv_string.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/misc/lv_assert.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/misc/lv_log.h

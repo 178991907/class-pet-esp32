@@ -1,0 +1,19 @@
+decomp_raw.o: \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/libs/frogfs/src/decomp_raw.c \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/libs/frogfs/src/../../../lv_conf_internal.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/libs/frogfs/src/../../../lv_conf_kconfig.h \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/tools/sdk/esp32s3/qio_opi/include/sdkconfig.h \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/tools/sdk/esp32s3/include/esp_common/include/esp_attr.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/libs/frogfs/src/../../../../../lv_conf.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/libs/frogfs/src/../../../stdlib/lv_string.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/libs/frogfs/src/../../../stdlib/../lv_conf_internal.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/libs/frogfs/src/../../../stdlib/../misc/lv_types.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/libs/frogfs/src/../../../stdlib/../misc/../lv_conf_internal.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/libs/frogfs/src/../../../misc/lv_fs.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/libs/frogfs/src/../../../misc/../lv_conf_internal.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/libs/frogfs/src/../../../misc/lv_types.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/libs/frogfs/src/frogfs_priv.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/libs/frogfs/src/../include/frogfs/frogfs_types.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/libs/frogfs/src/../include/frogfs/../../../../lv_conf_internal.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/libs/frogfs/src/../include/frogfs/frogfs.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/libs/frogfs/src/frogfs_format.h

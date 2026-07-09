@@ -13,10 +13,12 @@
 #if defined(ESP8266)
   #include <ESP8266WiFi.h>
   #include <ESP8266WebServer.h>
+  #include <DNSServer.h>
   using WebServerType = ESP8266WebServer;
 #else
   #include <WiFi.h>
   #include <WebServer.h>
+  #include <DNSServer.h>
   using WebServerType = WebServer;
 #endif
 
@@ -39,6 +41,8 @@ public:
   // 刷新并处理 AP 状态下的客户端请求（需要在 loop 中不断轮询）
   static void handleAPClient();
 
+  static bool isAPActive() { return is_ap_active; }
+
   // 获取设备 MAC 地址
   static String getMacAddress();
 
@@ -50,6 +54,7 @@ public:
 
 private:
   static WebServerType* server;
+  static DNSServer* dnsServer;
   static bool is_ap_active;
   static String cached_mac;
 

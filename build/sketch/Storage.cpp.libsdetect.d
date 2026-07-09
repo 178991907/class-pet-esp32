@@ -181,4 +181,15 @@ Storage.o: /Users/Terry/Downloads/class-pet-main/build/sketch/Storage.cpp \
  /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/cores/esp32/io_pin_remap.h \
  /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/cores/esp32/Arduino.h \
  /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/libraries/EEPROM/src/EEPROM.h \
- /Users/Terry/Downloads/class-pet-main/build/sketch/Config.h
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/libraries/FFat/src/FFat.h \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/libraries/FS/src/FS.h \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/tools/sdk/esp32s3/include/wear_levelling/include/wear_levelling.h \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/libraries/SD_MMC/src/SD_MMC.h \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/tools/sdk/esp32s3/include/driver/include/driver/sdmmc_types.h \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/libraries/SD_MMC/src/sd_defines.h \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/libraries/SPI/src/SPI.h \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/cores/esp32/esp32-hal-spi.h \
+ /Users/Terry/Downloads/class-pet-main/build/sketch/Config.h \
+ /Users/Terry/Downloads/class-pet-main/build/sketch/Board.h \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/tools/sdk/esp32s3/include/fatfs/src/ff.h \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/tools/sdk/esp32s3/include/fatfs/src/ffconf.h

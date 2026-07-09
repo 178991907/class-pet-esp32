@@ -66,6 +66,10 @@ public:
   // 2. 模拟语音文本指令交互（调试后门）
   static void postVoiceText(const String& text, VoiceActionResponse& res);
 
+  // 2.5 真实上传录音文件 (WAV格式) 并接收指令反馈
+  static void postVoiceAudio(const String& filePath, VoiceActionResponse& res);
+
+
   // 3. 补传一条离线任务申报
   static bool reportOfflineTask(const String& taskName, int points, uint32_t timestamp);
 

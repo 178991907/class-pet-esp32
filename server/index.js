@@ -29,6 +29,8 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 app.use('/images', express.static(path.join(__dirname, 'public/images')))
 app.use('/pet-garden/images', express.static(path.join(__dirname, 'public/images'))) // 兼容带前缀的路径
+app.use('/audio', express.static(path.join(__dirname, 'public/audio')))
+app.use('/pet-garden/audio', express.static(path.join(__dirname, 'public/audio')))
 app.use('/pets', express.static(path.join(__dirname, '../public/pets')))
 app.use('/pet-garden/pets', express.static(path.join(__dirname, '../public/pets')))
 

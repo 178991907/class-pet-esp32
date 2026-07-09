@@ -242,13 +242,19 @@
  /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/tools/sdk/esp32s3/include/mbedtls/port/include/aes/esp_aes.h \
  /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/tools/sdk/esp32s3/include/hal/include/hal/aes_types.h \
  /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/tools/sdk/esp32s3/include/mbedtls/mbedtls/include/mbedtls/error.h \
+ /Users/Terry/Documents/Arduino/libraries/ArduinoJson/src/ArduinoJson.h \
+ /Users/Terry/Documents/Arduino/libraries/ArduinoJson/src/ArduinoJson.hpp \
+ /Users/Terry/Documents/Arduino/libraries/ArduinoJson/src/ArduinoJson/Configuration.hpp \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/libraries/SD_MMC/src/SD_MMC.h \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/libraries/FS/src/FS.h \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/tools/sdk/esp32s3/include/driver/include/driver/sdmmc_types.h \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/libraries/SD_MMC/src/sd_defines.h \
  /Users/Terry/Downloads/class-pet-main/build/sketch/Network.h \
  /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/libraries/WebServer/src/WebServer.h \
  /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/libraries/WebServer/src/HTTP_Method.h \
  /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/tools/sdk/esp32s3/include/nghttp/port/include/http_parser.h \
  /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/libraries/WebServer/src/Uri.h \
  /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/libraries/WebServer/src/detail/RequestHandler.h \
- /Users/Terry/Downloads/class-pet-main/build/sketch/Config.h \
- /Users/Terry/Documents/Arduino/libraries/ArduinoJson/src/ArduinoJson.h \
- /Users/Terry/Documents/Arduino/libraries/ArduinoJson/src/ArduinoJson.hpp \
- /Users/Terry/Documents/Arduino/libraries/ArduinoJson/src/ArduinoJson/Configuration.hpp
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/libraries/DNSServer/src/DNSServer.h \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/libraries/WiFi/src/WiFiUdp.h \
+ /Users/Terry/Downloads/class-pet-main/build/sketch/Config.h

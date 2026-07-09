@@ -1,0 +1,27 @@
+/Users/Terry/Downloads/class-pet-main/build/libraries/lvgl/debugging/monkey/lv_monkey.c.o: \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/debugging/monkey/lv_monkey.c \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/debugging/monkey/lv_monkey_private.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/debugging/monkey/lv_monkey.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/debugging/monkey/../../lv_conf_internal.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/debugging/monkey/../../lv_conf_kconfig.h \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/tools/sdk/esp32s3/qio_opi/include/sdkconfig.h \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/tools/sdk/esp32s3/include/esp_common/include/esp_attr.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/debugging/monkey/../../../../lv_conf.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/debugging/monkey/../../indev/lv_indev.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/debugging/monkey/../../indev/../core/lv_group.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/debugging/monkey/../../indev/../core/../lv_conf_internal.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/debugging/monkey/../../indev/../core/../misc/lv_types.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/debugging/monkey/../../indev/../core/../misc/../lv_conf_internal.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/debugging/monkey/../../indev/../core/../misc/lv_ll.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/debugging/monkey/../../indev/../core/../misc/lv_types.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/debugging/monkey/../../indev/../misc/lv_area.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/debugging/monkey/../../indev/../misc/../lv_conf_internal.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/debugging/monkey/../../indev/../misc/lv_types.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/debugging/monkey/../../indev/../misc/lv_math.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/debugging/monkey/../../indev/../misc/lv_timer.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/debugging/monkey/../../indev/../misc/../tick/lv_tick.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/debugging/monkey/../../indev/../misc/../tick/../lv_conf_internal.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/debugging/monkey/../../indev/../misc/../tick/../misc/lv_types.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/debugging/monkey/../../indev/../misc/lv_ll.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/debugging/monkey/../../indev/../misc/lv_event.h \
+ /Users/Terry/Documents/Arduino/libraries/lvgl/src/debugging/monkey/../../indev/../misc/lv_array.h

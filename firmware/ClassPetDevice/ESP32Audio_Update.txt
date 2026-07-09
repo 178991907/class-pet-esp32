@@ -1,0 +1,8 @@
+// I2S Configuration for Mic
+#include <driver/i2s.h>
+#include "Board.h"
+#include <SD.h>
+
+#define I2S_MIC_PORT I2S_NUM_1
+#define SAMPLE_RATE 16000
+#define BUFFER_LEN 1024

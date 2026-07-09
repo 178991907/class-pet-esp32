@@ -3,6 +3,7 @@
 void CST820Touch::init(int sda, int scl, int rst, int int_pin) {
   _sda = sda; _scl = scl; _rst = rst; _int = int_pin;
   Wire.begin(_sda, _scl);
+  Wire.setTimeOut(100);
   
   if (_rst != -1) {
     pinMode(_rst, OUTPUT);
