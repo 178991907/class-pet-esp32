@@ -264,6 +264,11 @@ void DeviceStateMachine::handleEvent(DeviceEvent ev) {
 // 状态周期轮询器 (State Poller)
 // ==========================================
 void DeviceStateMachine::loopState() {
+  static DeviceState last_state = (DeviceState)255;
+  if (_state != last_state) {
+    _state_start_time = millis();
+    last_state = _state;
+  }
   static unsigned long lastOfflineCheck = 0;
   
   switch (_state) {

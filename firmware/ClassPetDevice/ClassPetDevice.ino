@@ -183,3 +183,9 @@ void loop() {
   }
   vTaskDelay(pdMS_TO_TICKS(5)); // 5ms 阻塞轮询，避免看门狗超时
 }
+
+// Hack to fix TFT_eSPI missing dmaWait on ESP32-S3
+#include <TFT_eSPI.h>
+__attribute__((weak)) void TFT_eSPI::dmaWait(void) {
+}
+
