@@ -517,9 +517,12 @@ void DeviceStateMachine::loopState() {
       uint32_t recordStart = millis();
       bool is_btn_start = (digitalRead(PHYSICAL_KEY_PIN) == LOW);
       
-      // 等待按键释放，或者超时 (实体键最长 10 秒，触屏固定 5 秒)，或者触摸屏收到停止事件
-      uint32_t timeout = is_btn_start ? 10000 : 5000;
+      // 等待按键释放，或者超时 (实体键最长 15 秒，触屏固定 10 秒)
+      uint32_t timeout = is_btn_start ? 15000 : 10000;
       while (millis() - recordStart < timeout) {
+        // 关键死锁修复：在此循环内必须驱动底层音频库读取，否则 I2S DMA 溢出，且界面条不会动
+        audio->update();
+        
         LVGL_LOCK();
         ClassPetUI::getInstance().showRecordingScreen(audio->getRecordVolumeDb());
         LVGL_UNLOCK();
@@ -534,7 +537,7 @@ void DeviceStateMachine::loopState() {
             }
           }
         }
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(20)); // 改为20ms增加响应速度
       }
       
       if (!is_btn_start) {
