@@ -13,6 +13,7 @@ export const useSystemStore = defineStore('system', () => {
   const taskConfirmDelay = ref(30)
   const openrouterApiKey = ref('')
   const openrouterModel = ref('openrouter/free')
+  const groqApiKey = ref('')
   const screenBrightness = ref(80)
   const screenSleepSeconds = ref(15)
   const asrProvider = ref('openrouter')
@@ -46,9 +47,10 @@ export const useSystemStore = defineStore('system', () => {
       openrouterModel.value = settingsRes.data.openrouter_model || 'openrouter/free'
       screenBrightness.value = settingsRes.data.screen_brightness ?? 80
       screenSleepSeconds.value = settingsRes.data.screen_sleep_seconds ?? 15
-      asrProvider.value = settingsRes.data.asr_provider || 'openrouter'
+      asrProvider.value = settingsRes.data.asr_provider || 'groq'
       baiduApiKey.value = settingsRes.data.baidu_api_key || ''
       baiduSecretKey.value = settingsRes.data.baidu_secret_key || ''
+      groqApiKey.value = settingsRes.data.groq_api_key || ''
     } catch (err) {
       console.error('加载系统配置失败:', err)
     }
@@ -85,7 +87,8 @@ export const useSystemStore = defineStore('system', () => {
         screen_sleep_seconds: Number(screenSleepSeconds.value),
         asr_provider: asrProvider.value,
         baidu_api_key: baiduApiKey.value,
-        baidu_secret_key: baiduSecretKey.value
+        baidu_secret_key: baiduSecretKey.value,
+        groq_api_key: groqApiKey.value
       })
       toast.success('系统设置保存成功！')
     } catch (err) {
@@ -218,6 +221,7 @@ export const useSystemStore = defineStore('system', () => {
     taskConfirmDelay,
     openrouterApiKey,
     openrouterModel,
+    groqApiKey,
     screenBrightness,
     screenSleepSeconds,
     asrProvider,

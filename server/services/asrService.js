@@ -1,6 +1,6 @@
 // ASR (自动语音识别) 服务层
-// 将三个 provider 的调用逻辑从路由中抽出，配置与实现分离
-// provider 可选: 'baidu' | 'openai' | 'openrouter'
+// 将多个 provider 的调用逻辑从路由中抽出，配置与实现分离
+// provider 可选: 'baidu' | 'openai' | 'openrouter' | 'groq'
 
 import fetch from 'node-fetch'
 import FormData from 'form-data'
@@ -25,7 +25,10 @@ export async function getAsrConfig() {
   const baiduSecretRow = await getAsync("SELECT value FROM settings WHERE key = 'baidu_secret_key'")
   const baiduSecret = baiduSecretRow ? JSON.parse(baiduSecretRow.value) : ''
 
-  return { provider, apiKey, baiduKey, baiduSecret }
+  const groqKeyRow = await getAsync("SELECT value FROM settings WHERE key = 'groq_api_key'")
+  const groqKey = groqKeyRow ? JSON.parse(groqKeyRow.value) : ''
+
+  return { provider, apiKey, baiduKey, baiduSecret, groqKey }
 }
 
 // ================= WAV → PCM 转换 =================
@@ -148,12 +151,44 @@ async function recognizeOpenRouter(audioBuffer, { apiKey }) {
   return data.text
 }
 
+/**
+ * Groq ASR (免费 Whisper API，速度极快)
+ * 模型: whisper-large-v3 / whisper-large-v3-turbo
+ * API 兼容 OpenAI 接口格式
+ */
+async function recognizeGroq(audioBuffer, { groqKey }) {
+  if (!groqKey) {
+    throw new Error('未配置 Groq API Key (groq_api_key)')
+  }
+
+  const form = new FormData()
+  form.append('file', audioBuffer, { filename: 'record.wav', contentType: 'audio/wav' })
+  form.append('model', 'whisper-large-v3')
+  form.append('language', 'zh')
+  form.append('response_format', 'json')
+
+  const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${groqKey}`, ...form.getHeaders() },
+    body: form
+  })
+
+  if (!response.ok) {
+    const err = await response.text()
+    throw new Error(`Groq ASR ${response.status}: ${err}`)
+  }
+
+  const data = await response.json()
+  return data.text
+}
+
 // ================= 统一入口 =================
 
 const PROVIDERS = {
   baidu: recognizeBaidu,
   openai: recognizeOpenAI,
-  openrouter: recognizeOpenRouter
+  openrouter: recognizeOpenRouter,
+  groq: recognizeGroq
 }
 
 /**

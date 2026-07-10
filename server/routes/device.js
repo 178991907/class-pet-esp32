@@ -359,6 +359,7 @@ const SETTINGS_KEYS = [
   'task_confirm_delay',
   'openrouter_api_key',
   'openrouter_model',
+  'groq_api_key',
   'screen_brightness',
   'screen_sleep_seconds',
   'asr_provider',
@@ -371,16 +372,17 @@ const SETTINGS_DEFAULTS = {
   task_confirm_delay: 30,
   openrouter_api_key: '',
   openrouter_model: 'openrouter/free',
+  groq_api_key: '',
   screen_brightness: 80,
   screen_sleep_seconds: 15,
-  asr_provider: 'openrouter',
+  asr_provider: 'groq',
   baidu_api_key: '',
   baidu_secret_key: ''
 }
 
 // 需要转 Number 的 key
 const NUMERIC_KEYS = ['task_confirm_delay', 'screen_brightness', 'screen_sleep_seconds']
-const ALLOWED_ASR_PROVIDERS = ['openai', 'openrouter', 'baidu']
+const ALLOWED_ASR_PROVIDERS = ['openai', 'openrouter', 'baidu', 'groq']
 
 router.get('/settings', authMiddleware, async (req, res) => {
   try {

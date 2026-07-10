@@ -181,11 +181,18 @@ async function handleUpdateAdminPassword() {
                         <span class="text-xs text-gray-400 block mb-1.5 font-bold">ASR 提供商 (Provider)</span>
                         <select v-model="systemStore.asrProvider"
                           class="w-full border-2 border-gray-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:border-orange-400 font-bold text-gray-700">
+                          <option value="groq">Groq Whisper (推荐，免费且极速)</option>
                           <option value="openrouter">OpenRouter (通用，余额需 ≥ $0.5)</option>
                           <option value="openai">OpenAI Whisper (需 OpenAI 官方 key)</option>
                           <option value="baidu">百度短语音 (中文免费，月 5 万次)</option>
                         </select>
-                        <p class="text-xs text-gray-400 mt-1 font-medium">建议选 "百度短语音"：完全免费、中文识别准确率最高、不需要海外 API。</p>
+                        <p class="text-xs text-gray-400 mt-1 font-medium">推荐使用 Groq：完全免费、速度极快、支持中文。注册地址 console.groq.com。</p>
+                      </div>
+                      <div v-if="systemStore.asrProvider === 'groq'">
+                        <span class="text-xs text-gray-400 block mb-1.5">Groq API Key</span>
+                        <input v-model="systemStore.groqApiKey" type="password" placeholder="gsk-..."
+                          class="w-full border-2 border-gray-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:border-orange-400 transition-colors" />
+                        <p class="text-xs text-gray-400 mt-1 font-medium">Groq 提供免费的 Whisper Large v3 语音转写。在 console.groq.com 注册后创建 API Key 即可使用。</p>
                       </div>
                       <div v-if="systemStore.asrProvider === 'baidu'">
                         <span class="text-xs text-gray-400 block mb-1.5">百度 API Key (API_KEY)</span>
@@ -196,11 +203,11 @@ async function handleUpdateAdminPassword() {
                           class="w-full border-2 border-gray-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:border-orange-400 transition-colors" />
                         <p class="text-xs text-gray-400 mt-1 font-medium">百度短语音每月免费 5 万次，足够班级使用。开通步骤：百度智能云 → 短语音识别 → 创建应用 → 复制 API Key / Secret Key。</p>
                       </div>
-                      <div v-else>
+                      <div v-if="systemStore.asrProvider === 'openrouter' || systemStore.asrProvider === 'openai'">
                         <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
                           <p class="text-xs text-yellow-800">
-                            <strong>⚠️ 当前 OpenRouter 余额不足。</strong> OpenRouter 音频 API 要求至少 $0.5 余额，因此语音申报一直返回 "没听清"。
-                            建议切换到 "百度短语音" (免费) 或填入有效的 OpenAI 官方 Key。
+                            <strong>⚠️ OpenRouter 音频 API 需余额 ≥ $0.5。</strong>如果余额不足，语音申报会返回"没听清"。
+                            建议切换到 "Groq Whisper" (免费) 或 "百度短语音" (免费)。
                           </p>
                         </div>
                       </div>
