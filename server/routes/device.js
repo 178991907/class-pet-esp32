@@ -11,6 +11,7 @@ import { recognizeSpeech, isAsrConfigError } from '../services/asrService.js'
 import { classifyIntent } from '../services/nlpService.js'
 import { autoConfirmLazyLoad } from '../services/taskService.js'
 import { getSetting, setSetting, getSettings, setSettings } from '../utils/settings.js'
+import { getTtsAudioUrl, handleTtsStream } from '../services/ttsService.js'
 
 const router = Router()
 const upload = multer({ storage: multer.memoryStorage() })
@@ -254,6 +255,12 @@ router.post(
         console.error('自动清理历史对话记录失败:', err)
       })
 
+      // === 新增：为回复生成 TTS 语音 URL ===
+      const audioUrl = getTtsAudioUrl(responseData.reply_text, req)
+      if (audioUrl) {
+        responseData.audio_url = audioUrl
+      }
+
       res.json(responseData)
     } catch (error) {
       console.error('语音路由执行失败:', error.stack || error)
@@ -264,6 +271,9 @@ router.post(
 
 // ================= 3. 语音合成 TTS 中继 =================
 
+router.get('/tts-stream', handleTtsStream)
+
+// 兼容遗留的 /tts (若有旧代码调用)
 router.get('/tts', async (req, res) => {
   const { text } = req.query
 

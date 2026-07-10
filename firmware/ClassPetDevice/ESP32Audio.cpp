@@ -1,5 +1,4 @@
 #include "ESP32Audio.h"
-#include "ES8311.h"
 #include "Board.h"
 #include "LcdDisplay.h"
 #include "ClassPetUI.h"
@@ -26,24 +25,9 @@ ESP32Audio::~ESP32Audio() {
 void ESP32Audio::init() {
   // 1. 初始化播放音频 (I2S_NUM_0 由内部使用)
   pinMode(AUDIO_EN_PIN, OUTPUT);
-  // 注意：AUDIO_EN_PIN 取决于功放芯片型号。
-  // 当前硬件 (SC8002B / FM8002E) 是高电平使能 (SD 引脚拉高打开功放输出)。
-  // 若实测发现仍无声音，可临时改 LOW 验证。
-  digitalWrite(AUDIO_EN_PIN, HIGH); // 高电平使能功放 (SC8002B / FM8002E)
+  // 官方图纸标注：音频使能，低电平有效
+  digitalWrite(AUDIO_EN_PIN, LOW);
   
-  bool codec_ok = ES8311::init(TOUCH_SDA_PIN, TOUCH_SCL_PIN);
-  
-  LcdDisplay::getInstance().lock();
-  if (codec_ok) {
-    ClassPetUI::getInstance().showToast("音频芯片 ES8311 初始化成功！", 6000);
-  } else {
-    ClassPetUI::getInstance().showToast("音频芯片 ES8311 初始化失败！请检查硬件", 15000);
-  }
-  LcdDisplay::getInstance().unlock();
-
-  // ES8311 默认是 DAC 通路（播放）打开，ADC 通路（录音）关闭
-  ES8311::enableDAC(true);
-  ES8311::enableADC(false);
   audioStream.setPinout(I2S_BCLK_PIN, I2S_LRC_PIN, I2S_DOUT_PIN);
   audioStream.setVolume(12); // 设置适度音量，防止小喇叭爆音
   is_playing = false;
@@ -70,7 +54,7 @@ void ESP32Audio::init() {
     .bck_io_num = I2S_BCLK_PIN,        // 与播放端共享 BCLK
     .ws_io_num = I2S_LRC_PIN,          // 与播放端共享 WS/LRC
     .data_out_num = I2S_PIN_NO_CHANGE, // 录音端不输出
-    .data_in_num = I2S_DOUT_PIN        // ES8311 的 SDOUT 走 DOUT 引脚 (与 DAC SDIN 同一根)
+    .data_in_num = I2S_MIC_SD_PIN      // 独立硅麦的数据输入引脚
   };
   
   if (i2s_driver_install(I2S_PORT_REC, &i2s_config, 0, NULL) == ESP_OK) {
@@ -128,32 +112,23 @@ void ESP32Audio::startRecording() {
     stopAudio();
   }
 
-  // 切换 ES8311 到 ADC 录音模式 (关闭 DAC、打开 ADC 模拟通路)
-  ES8311::enableDAC(false);
-  ES8311::enableADC(true);
-
-  // 重新配置 I2S_NUM_1 共享播放端的 BCLK/LRC，data_in 指向 ES8311 SDOUT
+  // 重新配置 I2S_NUM_1 抢占共享的 BCLK/LRC
   i2s_pin_config_t pin_config = {
     .bck_io_num = I2S_BCLK_PIN,
     .ws_io_num = I2S_LRC_PIN,
     .data_out_num = I2S_PIN_NO_CHANGE,
-    .data_in_num = I2S_DOUT_PIN
+    .data_in_num = I2S_MIC_SD_PIN
   };
   i2s_set_pin(I2S_PORT_REC, &pin_config);
 
   if (SD_MMC.cardType() == CARD_NONE) {
     Serial.println("❌ 录音失败，SD 卡不可用！");
-    // 切回 DAC 模式
-    ES8311::enableADC(false);
-    ES8311::enableDAC(true);
     return;
   }
 
   record_file = SD_MMC.open("/record.wav", FILE_WRITE);
   if (!record_file) {
     Serial.println("❌ 录音失败，无法创建文件！");
-    ES8311::enableADC(false);
-    ES8311::enableDAC(true);
     return;
   }
 
@@ -193,9 +168,7 @@ bool ESP32Audio::stopRecording(uint8_t*& wavBuffer, size_t& wavSize) {
     }
   }
 
-  // 关闭 ADC 通路，切回 DAC 播放模式以便后续 TTS 播放
-  ES8311::enableADC(false);
-  ES8311::enableDAC(true);
+  // 录音结束
 
   // 对于 SD 卡模式，这里不返回实际的内存 buffer。网络层将直接读取 SD 文件。
   // 通过返回 nullptr 告知网络层走文件流上传。
@@ -230,9 +203,7 @@ bool ESP32Audio::playAudioStream(const String& url) {
     stopRecording(p, s);
   }
 
-  // 确保 ES8311 处于 DAC 播放模式
-  ES8311::enableADC(false);
-  ES8311::enableDAC(true);
+  // 播放开始
 
   // 重新夺回引脚控制权给播放端 (I2S0)
   audioStream.setPinout(I2S_BCLK_PIN, I2S_LRC_PIN, I2S_DOUT_PIN);

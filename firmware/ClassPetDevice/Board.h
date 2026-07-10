@@ -20,15 +20,13 @@
 #define TOUCH_RST_PIN          -1   // 复位引脚
 
 // ==========================================
-// 3. 音频外设引脚配置 (ES8311 I2S & 功放)
+// 3. 音频外设引脚配置 (直连 I2S 麦克风与功放)
 // ==========================================
-#define I2S_BCLK_PIN           5    // I2S 比特时钟 (Bit Clock)
-#define I2S_LRC_PIN            7    // I2S 左右声道选择 (L/R Clock / WS)
-#define I2S_DOUT_PIN           8    // I2S 数据输出 (Data Out) 到喇叭
-#define I2S_MIC_SCK_PIN        5    // 麦克风时钟复用 BCLK
-#define I2S_MIC_WS_PIN         7    // 麦克风时钟复用 LRC
-#define I2S_MIC_SD_PIN         6    // 麦克风数据输入 (Data In)
-#define AUDIO_EN_PIN           2    // 功放使能引脚 (AUDIO_EN)
+#define AUDIO_EN_PIN           1    // 功放使能引脚 (低电平有效)
+#define I2S_BCLK_PIN           4    // I2S 比特时钟 (MCLK/BCLK)
+#define I2S_LRC_PIN            5    // I2S 左右声道时钟 (WS/LRC)
+#define I2S_DOUT_PIN           6    // I2S 数据输出 (喇叭)
+#define I2S_MIC_SD_PIN         8    // I2S 数据输入 (麦克风)
 
 // ==========================================
 // 4. 物理按键与指示配置 (IO0)
