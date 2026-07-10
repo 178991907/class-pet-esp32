@@ -6,7 +6,17 @@
 
 ---
 
-## 🚀 最新版本：v1.4.0 (架构重构版)
+## 🚀 最新版本：v1.4.1 (Groq 语音识别版)
+
+- **🎙️ 新增 Groq Whisper ASR 提供商**：完全免费、速度极快的语音识别服务，作为 OpenRouter 余额不足问题的解决方案。
+  - `asrService.js` 新增 `recognizeGroq()` 函数，使用 Groq 免费 Whisper Large v3 API。
+  - 前端系统管理弹窗新增 Groq 选项（推荐），支持在线配置 Groq API Key。
+  - 默认 ASR provider 从 `openrouter` 改为 `groq`。
+  - Groq API 兼容 OpenAI 接口格式，支持中文语言识别，注册地址：console.groq.com。
+
+---
+
+## 🚀 历史版本：v1.4.0 (架构重构版)
 
 - **🏗️ 全面架构重构**：对前后端进行系统性拆分，大幅提升代码可维护性和可读性。
 - **📦 前端 Home.vue 拆分**：将 3092 行的巨型组件拆分为 349 行的精简入口 + 17 个独立组件 + 3 个 Pinia Store + 2 个 Composable，代码量减少 89%。
