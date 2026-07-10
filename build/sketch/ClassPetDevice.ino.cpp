@@ -48,11 +48,11 @@ bool isMaxLevel = false;
 void updateStudentCache(const DeviceStatusResponse& res);
 #line 62 "/Users/Terry/Downloads/class-pet-main/firmware/ClassPetDevice/ClassPetDevice.ino"
 void lvglTask(void* arg);
-#line 84 "/Users/Terry/Downloads/class-pet-main/firmware/ClassPetDevice/ClassPetDevice.ino"
+#line 91 "/Users/Terry/Downloads/class-pet-main/firmware/ClassPetDevice/ClassPetDevice.ino"
 void onPomodoroFinished();
-#line 106 "/Users/Terry/Downloads/class-pet-main/firmware/ClassPetDevice/ClassPetDevice.ino"
+#line 119 "/Users/Terry/Downloads/class-pet-main/firmware/ClassPetDevice/ClassPetDevice.ino"
 void setup();
-#line 166 "/Users/Terry/Downloads/class-pet-main/firmware/ClassPetDevice/ClassPetDevice.ino"
+#line 179 "/Users/Terry/Downloads/class-pet-main/firmware/ClassPetDevice/ClassPetDevice.ino"
 void loop();
 #line 45 "/Users/Terry/Downloads/class-pet-main/firmware/ClassPetDevice/ClassPetDevice.ino"
 void updateStudentCache(const DeviceStatusResponse& res) {
@@ -80,12 +80,19 @@ void lvglTask(void* arg) {
     // 驱动 LVGL 内部定时器与渲染轮询
     LcdDisplay::getInstance().update();
     
-    // 监听物理按键 (IO0 / BOOT 按键)
-    if (digitalRead(PHYSICAL_KEY_PIN) == LOW) {
-      // 物理按键触发语音模拟对话
-      DeviceStateMachine::getInstance().postEvent(EVENT_VOICE_START);
-      vTaskDelay(pdMS_TO_TICKS(500)); // 消抖防连击
+    // 监听物理按键 (IO0 / BOOT 按键)，加入启动延时和下降沿检测
+    static uint32_t startup_time = millis();
+    static bool last_key_state = HIGH;
+    bool current_key_state = digitalRead(PHYSICAL_KEY_PIN);
+    
+    if (millis() - startup_time > 5000) { // 启动 5 秒后才响应按键，彻底避开上电不稳期
+      if (current_key_state == LOW && last_key_state == HIGH) {
+        // 物理按键触发语音模拟对话
+        DeviceStateMachine::getInstance().postEvent(EVENT_VOICE_START);
+        vTaskDelay(pdMS_TO_TICKS(500)); // 消抖防连击
+      }
     }
+    last_key_state = current_key_state;
     
     vTaskDelay(pdMS_TO_TICKS(10)); // 10ms 频率刷新，保障流畅度
   }
@@ -105,12 +112,18 @@ void onPomodoroFinished() {
 
   // 1. 压入本地 Flash/EEPROM 暂存队列
   Storage::pushOfflineTask(task);
-  // 2. 屏幕字幕闪烁提示
+  // 2. 屏幕字幕闪烁提示 (加锁保护)
+  LcdDisplay::getInstance().lock();
   ClassPetUI::getInstance().showToast("专注结束！+2积分已存入暂存队列", 5000);
+  LcdDisplay::getInstance().unlock();
 
-  // 播放番茄钟结束提示音，并推送事件通知状态机
-  audio->playAudioStream("http://local-spiffs/ringtone.mp3");
-  DeviceStateMachine::getInstance().postEvent(EVENT_VOICE_PLAY_DONE); // 用语音播完事件切回正常态
+  extern AudioHAL* audio;
+  if (audio) {
+    String ringtoneUrl = String(deviceConfig.server_url) + "/audio/ringtone.wav";
+    audio->playAudioStream(ringtoneUrl);
+  }
+
+  DeviceStateMachine::getInstance().postEvent(EVENT_POMODORO_STOP); // 切回正常态
 }
 
 // ==========================================

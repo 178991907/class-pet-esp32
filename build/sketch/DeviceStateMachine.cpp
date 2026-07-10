@@ -157,19 +157,34 @@ void DeviceStateMachine::taskEntry(void* arg) {
 // ==========================================
 void DeviceStateMachine::handleEvent(DeviceEvent ev) {
   switch (ev) {
-    case EVENT_POMODORO_START:
+    case EVENT_POMODORO_SETTINGS:
       if (_state == STATE_NORMAL_ONLINE || _state == STATE_NORMAL_OFFLINE) {
+        DEBUG_PRINTLN("🍅 [状态机] 收到事件: 进入番茄钟设置");
+        _state = STATE_POMODORO_SETTINGS;
+        LVGL_LOCK();
+        ClassPetUI::getInstance().showTomatoSettings();
+        LVGL_UNLOCK();
+      }
+      break;
+      
+    case EVENT_POMODORO_START:
+      if (_state == STATE_NORMAL_ONLINE || _state == STATE_NORMAL_OFFLINE || _state == STATE_POMODORO_SETTINGS) {
         DEBUG_PRINTLN("🍅 [状态机] 收到事件: 启动番茄工作钟");
-        tomatoTimer.start(25); // 开启 25 分钟番茄钟
+        uint32_t mins = ClassPetUI::getInstance().getSelectedTomatoTime();
+        tomatoTimer.start(mins);
         _state = STATE_POMODORO;
       }
       break;
       
     case EVENT_POMODORO_STOP:
-      if (_state == STATE_POMODORO) {
-        DEBUG_PRINTLN("🍅 [状态机] 收到事件: 退出番茄工作钟");
+      if (_state == STATE_POMODORO || _state == STATE_POMODORO_SETTINGS) {
+        DEBUG_PRINTLN("🍅 [状态机] 收到事件: 退出番茄钟");
         tomatoTimer.stop();
-        _state = STATE_NORMAL_ONLINE;
+        _state = STATE_NORMAL_ONLINE; // 强行退出回在线态 (如果有网的话，依靠 loop 自行纠正离线)
+        _last_sync_time = millis(); // 退出时重置同步时间，避免立刻被网络同步阻塞导致 UI 卡顿
+        LVGL_LOCK();
+        ClassPetUI::getInstance().forceSwitchToNormal();
+        LVGL_UNLOCK();
       }
       break;
       
@@ -250,7 +265,6 @@ void DeviceStateMachine::handleEvent(DeviceEvent ev) {
 // 状态周期轮询器 (State Poller)
 // ==========================================
 void DeviceStateMachine::loopState() {
-  static unsigned long lastUpdate = 0;
   static unsigned long lastOfflineCheck = 0;
   
   switch (_state) {
@@ -353,7 +367,7 @@ void DeviceStateMachine::loopState() {
     
     case STATE_NORMAL_ONLINE: {
       // 每 20 秒定时上报心跳并同步数据
-      if (millis() - lastUpdate > 20000) {
+      if (millis() - _last_sync_time > 20000) {
         if (!Network::isConnected()) {
           postEvent(EVENT_NET_LOST);
           break;
@@ -388,7 +402,7 @@ void DeviceStateMachine::loopState() {
           }
         }
         
-        lastUpdate = millis();
+        _last_sync_time = millis();
       }
       
       // 更新在线屏幕显示（加锁保护 LVGL）
@@ -410,18 +424,23 @@ void DeviceStateMachine::loopState() {
           lastClockUpdate = millis();
         }
 
-        bool isOnline = (WiFi.status() == WL_CONNECTED);
-        LVGL_LOCK();
-        ClassPetUI::getInstance().showNormalScreen(
-          studentName, totalPoints, petLevel, expProgress, expRequired, isMaxLevel, isOnline
-        );
-        
-        int batPct = 100;
-        bool isCharging = false;
-        getBatteryStatus(batPct, isCharging);
-        
-        ClassPetUI::getInstance().updateStatusBar(isOnline, WiFi.SSID(), batPct, isCharging);
-        LVGL_UNLOCK();
+        static uint32_t lastUiUpdate = 0;
+        if (millis() - lastUiUpdate > 1000) {
+          bool isOnline = (WiFi.status() == WL_CONNECTED);
+          LVGL_LOCK();
+          ClassPetUI::getInstance().showNormalScreen(
+            studentName, totalPoints, petLevel, expProgress, expRequired, isMaxLevel, isOnline
+          );
+          
+          int batPct = 100;
+          bool isCharging = false;
+          getBatteryStatus(batPct, isCharging);
+          
+          ClassPetUI::getInstance().updateStatusBar(isOnline, WiFi.SSID(), batPct, isCharging);
+          LVGL_UNLOCK();
+          
+          lastUiUpdate = millis();
+        }
       }
       break;
     }
@@ -456,17 +475,21 @@ void DeviceStateMachine::loopState() {
       }
 
       // 渲染离线屏幕（加锁保护 LVGL）
-      LVGL_LOCK();
-      ClassPetUI::getInstance().showNormalScreen(
-        studentName, totalPoints, petLevel, 0, 0, false, false
-      );
-      
-      int batPct = 100;
-      bool isCharging = false;
-      getBatteryStatus(batPct, isCharging);
-      
-      ClassPetUI::getInstance().updateStatusBar(false, "", batPct, isCharging);
-      LVGL_UNLOCK();
+      static uint32_t lastOfflineUiUpdate = 0;
+      if (millis() - lastOfflineUiUpdate > 1000) {
+        LVGL_LOCK();
+        ClassPetUI::getInstance().showNormalScreen(
+          studentName, totalPoints, petLevel, 0, 0, false, false
+        );
+        
+        int batPct = 100;
+        bool isCharging = false;
+        getBatteryStatus(batPct, isCharging);
+        
+        ClassPetUI::getInstance().updateStatusBar(false, "", batPct, isCharging);
+        LVGL_UNLOCK();
+        lastOfflineUiUpdate = millis();
+      }
       break;
     }
     
@@ -495,8 +518,9 @@ void DeviceStateMachine::loopState() {
       uint32_t recordStart = millis();
       bool is_btn_start = (digitalRead(PHYSICAL_KEY_PIN) == LOW);
       
-      // 等待按键释放，或者超时 (10秒)，或者触摸屏收到停止事件
-      while (millis() - recordStart < 10000) {
+      // 等待按键释放，或者超时 (实体键最长 10 秒，触屏固定 5 秒)，或者触摸屏收到停止事件
+      uint32_t timeout = is_btn_start ? 10000 : 5000;
+      while (millis() - recordStart < timeout) {
         LVGL_LOCK();
         ClassPetUI::getInstance().showRecordingScreen(audio->getRecordVolumeDb());
         LVGL_UNLOCK();

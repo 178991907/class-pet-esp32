@@ -99,8 +99,10 @@ void onPomodoroFinished() {
 
   // 1. 压入本地 Flash/EEPROM 暂存队列
   Storage::pushOfflineTask(task);
-  // 2. 屏幕字幕闪烁提示
+  // 2. 屏幕字幕闪烁提示 (加锁保护)
+  LcdDisplay::getInstance().lock();
   ClassPetUI::getInstance().showToast("专注结束！+2积分已存入暂存队列", 5000);
+  LcdDisplay::getInstance().unlock();
 
   extern AudioHAL* audio;
   if (audio) {

@@ -58,6 +58,7 @@ enum DeviceState {
   STATE_PROCESSING,    // 正在请求云端 API
   STATE_RECORDING,     // 正在录音
   STATE_PLAYING_AUDIO, // 正在播放音频（TTS 语音合成）
+  STATE_POMODORO_SETTINGS, // 番茄钟设置界面
   STATE_POMODORO       // 本地番茄钟计时中
 };
 

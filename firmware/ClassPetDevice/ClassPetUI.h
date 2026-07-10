@@ -30,6 +30,7 @@ public:
   uint32_t getSelectedTomatoTime();
   
   void showToast(const String& message, int duration_ms = 3000);
+  void forceSwitchToNormal();
 
   // 设置并在主页播放宠物动图
   void setPetGif(const void* data, size_t size);

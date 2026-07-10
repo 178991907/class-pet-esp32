@@ -27,8 +27,11 @@ public:
   void showTomatoScreen(int remainingSec, int percent, bool isPaused);
   void showProcessingScreen(const String& statusText);
   void showRecordingScreen(int volumeDb);
+  void showTomatoSettings();
+  uint32_t getSelectedTomatoTime();
   
   void showToast(const String& message, int duration_ms = 3000);
+  void forceSwitchToNormal();
 
   // 设置并在主页播放宠物动图
   void setPetGif(const void* data, size_t size);
@@ -83,10 +86,13 @@ public:
   lv_obj_t* _lbl_diag_mac;
   
   // 番茄钟控件
+  lv_obj_t* _cont_tomato_settings;
+  lv_obj_t* _cont_tomato_timer;
+  lv_obj_t* _roller_tomato_time;
   lv_obj_t* _lbl_tomato_time;
   lv_obj_t* _arc_tomato_progress;
   lv_obj_t* _lbl_tomato_status;
-  lv_obj_t* _gif_tomato_pet;
+
   lv_image_dsc_t _gif_tomato_dsc;
 
   

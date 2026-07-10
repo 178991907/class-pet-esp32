@@ -287,7 +287,8 @@ void ClassPetUI::initDiagScreen() {
 // 3. 初始化番茄计时器工作页面 (ScreenTomato)
 // ==========================================
 void ClassPetUI::initTomatoScreen() {
-  lv_obj_add_event_cb(_scr_tomato, gesture_event_cb, LV_EVENT_GESTURE, NULL);
+  // 移除_scr_tomato上的手势注册，防止触摸偏移被识别为手势而吃掉点击事件
+  // lv_obj_add_event_cb(_scr_tomato, gesture_event_cb, LV_EVENT_GESTURE, NULL);
 
   // === 1. 设置界面容器 ===
   _cont_tomato_settings = lv_obj_create(_scr_tomato);
@@ -573,9 +574,9 @@ void ClassPetUI::showNormalScreen(const String& name, int points, int level, int
     lv_bar_set_value(_bar_normal_exp, pct, LV_ANIM_ON);
   }
   
-  // 防止在菜单页、待机页、番茄钟页、语音处理页时，被后台数据刷新强制拉回主页（闪退现象）
+  // 防止在菜单页、待机页、番茄钟页时，被后台数据刷新强制拉回主页（闪退现象）
   lv_obj_t* active_scr = lv_screen_active();
-  if (active_scr != _scr_menu && active_scr != _scr_standby && active_scr != _scr_tomato && active_scr != _scr_processing) {
+  if (active_scr != _scr_menu && active_scr != _scr_standby && active_scr != _scr_tomato) {
     loadScreen(_scr_normal);
   }
 }
@@ -710,6 +711,10 @@ void ClassPetUI::loadScreen(lv_obj_t* scr) {
   if (lv_screen_active() != scr) {
     lv_screen_load(scr);
   }
+}
+
+void ClassPetUI::forceSwitchToNormal() {
+  loadScreen(_scr_normal);
 }
 
 void ClassPetUI::setPetGif(const void* data, size_t size) {

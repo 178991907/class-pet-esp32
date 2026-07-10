@@ -503,42 +503,68 @@ void ApiClient::postVoiceAudio(const String& filePath, VoiceActionResponse& res)
     res.error_msg = "SD卡无法打开音频文件";
     return;
   }
-  
+
   size_t fileSize = file.size();
-  
-  String boundary = "----ClassPetAudioBoundary";
-  String head = "--" + boundary + "\r\n"
-              + "Content-Disposition: form-data; name=\"audio\"; filename=\"record.wav\"\r\n"
-              + "Content-Type: audio/wav\r\n\r\n";
-  String tail = "\r\n--" + boundary + "--\r\n";
-  
-  size_t totalLen = head.length() + fileSize + tail.length();
-  uint8_t* payload = (uint8_t*)ps_malloc(totalLen);
-  if (!payload) {
-    res.error_msg = "PSRAM内存不足，无法打包音频";
+  if (fileSize <= 44) {
+    // 只有 WAV 头但没有录音数据
+    res.error_msg = "录音文件为空，请检查麦克风硬件";
     file.close();
     return;
   }
-  
-  memcpy(payload, head.c_str(), head.length());
-  file.read(payload + head.length(), fileSize);
-  memcpy(payload + head.length() + fileSize, tail.c_str(), tail.length());
-  file.close();
+  Serial.printf("🎙️ [上传] 准备流式上传录音: %s, 大小: %u 字节\n", filePath.c_str(), (unsigned)fileSize);
 
+  // 复用与 status 相同的 WiFiClient 通道（HTTPClient 会通过 addHeader 携带签名）
   HTTPClient http;
-  String url = server_url + api_prefix + "/voice";
-  http.begin(url);
-  http.setTimeout(25000); // 语音识别可能较慢
-  http.addHeader("Content-Type", "multipart/form-data; boundary=" + boundary);
-  
+  String url = server_url + api_prefix + "/device/voice";
+
+  #if defined(ESP8266)
+    WiFiClient client;
+    client.setTimeout(35000);
+    http.begin(client, url);
+  #else
+    if (url.startsWith("https")) {
+      secureClient.setTimeout(35000); // 覆盖底层socket超时限制
+      http.begin(secureClient, url);
+    } else {
+      plainClient.setTimeout(35000);
+      http.begin(plainClient, url);
+    }
+  #endif
+  http.setTimeout(35000); // 语音识别可能较慢
+
   String ts = String(Network::getUnixTimestamp());
-  http.addHeader("X-Device-ID", WiFi.macAddress());
+  http.addHeader("X-Device-ID", Network::getMacAddress());
   http.addHeader("X-Device-Timestamp", ts);
   http.addHeader("X-Device-Signature", calculateSignature(ts, ""));
+  // 直接以原始 WAV 二进制流方式上传 (后端用 express.raw 接收)
+  http.addHeader("Content-Type", "audio/wav");
 
-  int code = http.sendRequest("POST", payload, totalLen);
+  // 关键：使用 sendRequest 重载直接发送原始字节流，避免分块上传的复杂性
+  // 由于 ESP32 的 HTTPClient 不直接支持流式分块上传，我们采用一次性发送。
+  // 为兼容无 PSRAM 板卡，先尝试 ps_malloc，失败后降级到普通 malloc。
+  uint8_t* payload = (uint8_t*)ps_malloc(fileSize);
+  if (!payload) {
+    Serial.println("⚠️ [上传] PSRAM 不可用或不足，降级到普通 malloc 申请大块内存");
+    payload = (uint8_t*)malloc(fileSize);
+  }
+  if (!payload) {
+    res.error_msg = "内存不足，无法打包音频 (PSRAM 与普通堆均无可用空间)";
+    file.close();
+    http.end();
+    return;
+  }
+  file.read(payload, fileSize);
+  file.close();
+
+  int code = http.sendRequest("POST", payload, fileSize);
   free(payload);
-  
+
+  // 恢复底层socket超时时间
+  #if !defined(ESP8266)
+    secureClient.setTimeout(10000);
+    plainClient.setTimeout(10000);
+  #endif
+
   if (code != 200) {
     res.error_msg = "语音上传失败，错误代码: " + String(code);
     return;
@@ -547,7 +573,7 @@ void ApiClient::postVoiceAudio(const String& filePath, VoiceActionResponse& res)
   String responseStr = http.getString();
   DynamicJsonDocument doc(512);
   DeserializationError error = deserializeJson(doc, responseStr);
-  
+
   if (error) {
     res.error_msg = "响应 JSON 解析失败";
     return;

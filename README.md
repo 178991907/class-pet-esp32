@@ -6,7 +6,25 @@
 
 ---
 
-## 🚀 最新版本：v1.3.5 (紧急修复版)
+## 🚀 最新版本：v1.4.0 (架构重构版)
+
+- **🏗️ 全面架构重构**：对前后端进行系统性拆分，大幅提升代码可维护性和可读性。
+- **📦 前端 Home.vue 拆分**：将 3092 行的巨型组件拆分为 349 行的精简入口 + 17 个独立组件 + 3 个 Pinia Store + 2 个 Composable，代码量减少 89%。
+  - **Pinia Store**：`useClassStore`、`useStudentStore`、`useSystemStore`，状态管理从组件内部迁移到集中式 Store。
+  - **组件化**：12 个模态框组件（班级、学生、评价、宠物选择、排行榜、记录、规则、Logo、聊天审计、日程、学生详情、系统管理）+ 4 个布局组件（AppHeader、StudentCard、LevelUpAnimation、LoadingScreen）。
+  - **Composable**：`useLevelUp`（升级动画）、`useConfirm`（确认对话框）。
+- **🔧 后端服务层抽取**：将 984 行的 `device.js` 拆分为 620 行路由 + 4 个独立服务模块。
+  - `asrService.js`：ASR 语音识别服务（百度/OpenAI/OpenRouter 三 provider）。
+  - `nlpService.js`：NLP 意图分类服务（大模型优先 + 正则降级）。
+  - `taskService.js`：自动审批懒加载机制。
+  - `deviceAuth.js`：设备认证中间件（HMAC 签名 + 防重放）。
+  - `settings.js`：通用 Settings 表读写工具。
+- **🧹 垃圾文件清理**：删除 25+ 个临时测试文件、补丁文件、`.orig` 备份文件。
+- **✅ 构建验证通过**：TypeScript 严格模式检查 + Vite 生产构建零错误，后端所有模块加载验证通过。
+
+---
+
+## 🚀 历史版本：v1.3.5 (紧急修复版)
 
 - **🩹 修复云端 Vercel 崩溃**：修复了 v1.3.1 引入 `multer` 和 `node-fetch` 但遗漏在 `package.json` 依赖中的致命疏忽，这导致了云端部署拉取代码后缺失模块，从而引发全站 API 瘫痪并持续抛出 500 (`FUNCTION_INVOCATION_FAILED`)。现已完全补充依赖。
 

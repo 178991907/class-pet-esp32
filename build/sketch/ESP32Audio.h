@@ -15,6 +15,8 @@ private:
   File record_file;
   uint32_t record_data_size;
   uint32_t record_start_time;
+  int16_t session_peak;       // 本次录音会话中的最大峰值 (0..32767)
+  uint32_t last_diag_log_ms;  // 上一次打印录音诊断日志的时间
 
   void writeWavHeader();
   void updateWavHeader();

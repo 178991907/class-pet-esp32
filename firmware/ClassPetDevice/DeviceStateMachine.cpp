@@ -181,6 +181,9 @@ void DeviceStateMachine::handleEvent(DeviceEvent ev) {
         tomatoTimer.stop();
         _state = STATE_NORMAL_ONLINE; // 强行退出回在线态 (如果有网的话，依靠 loop 自行纠正离线)
         _last_sync_time = millis(); // 退出时重置同步时间，避免立刻被网络同步阻塞导致 UI 卡顿
+        LVGL_LOCK();
+        ClassPetUI::getInstance().forceSwitchToNormal();
+        LVGL_UNLOCK();
       }
       break;
       
@@ -420,18 +423,23 @@ void DeviceStateMachine::loopState() {
           lastClockUpdate = millis();
         }
 
-        bool isOnline = (WiFi.status() == WL_CONNECTED);
-        LVGL_LOCK();
-        ClassPetUI::getInstance().showNormalScreen(
-          studentName, totalPoints, petLevel, expProgress, expRequired, isMaxLevel, isOnline
-        );
-        
-        int batPct = 100;
-        bool isCharging = false;
-        getBatteryStatus(batPct, isCharging);
-        
-        ClassPetUI::getInstance().updateStatusBar(isOnline, WiFi.SSID(), batPct, isCharging);
-        LVGL_UNLOCK();
+        static uint32_t lastUiUpdate = 0;
+        if (millis() - lastUiUpdate > 1000) {
+          bool isOnline = (WiFi.status() == WL_CONNECTED);
+          LVGL_LOCK();
+          ClassPetUI::getInstance().showNormalScreen(
+            studentName, totalPoints, petLevel, expProgress, expRequired, isMaxLevel, isOnline
+          );
+          
+          int batPct = 100;
+          bool isCharging = false;
+          getBatteryStatus(batPct, isCharging);
+          
+          ClassPetUI::getInstance().updateStatusBar(isOnline, WiFi.SSID(), batPct, isCharging);
+          LVGL_UNLOCK();
+          
+          lastUiUpdate = millis();
+        }
       }
       break;
     }
@@ -466,17 +474,21 @@ void DeviceStateMachine::loopState() {
       }
 
       // 渲染离线屏幕（加锁保护 LVGL）
-      LVGL_LOCK();
-      ClassPetUI::getInstance().showNormalScreen(
-        studentName, totalPoints, petLevel, 0, 0, false, false
-      );
-      
-      int batPct = 100;
-      bool isCharging = false;
-      getBatteryStatus(batPct, isCharging);
-      
-      ClassPetUI::getInstance().updateStatusBar(false, "", batPct, isCharging);
-      LVGL_UNLOCK();
+      static uint32_t lastOfflineUiUpdate = 0;
+      if (millis() - lastOfflineUiUpdate > 1000) {
+        LVGL_LOCK();
+        ClassPetUI::getInstance().showNormalScreen(
+          studentName, totalPoints, petLevel, 0, 0, false, false
+        );
+        
+        int batPct = 100;
+        bool isCharging = false;
+        getBatteryStatus(batPct, isCharging);
+        
+        ClassPetUI::getInstance().updateStatusBar(false, "", batPct, isCharging);
+        LVGL_UNLOCK();
+        lastOfflineUiUpdate = millis();
+      }
       break;
     }
     

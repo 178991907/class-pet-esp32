@@ -26,7 +26,7 @@ LV_FONT_DECLARE(my_font_cjk_16);
 
 // 按钮点击事件回调函数
 static void btn_tomato_cb(lv_event_t* e) {
-  DeviceStateMachine::getInstance().postEvent(EVENT_POMODORO_START);
+  DeviceStateMachine::getInstance().postEvent(EVENT_POMODORO_SETTINGS);
 }
 
 static void btn_voice_cb(lv_event_t* e) {
@@ -41,9 +41,7 @@ static void btn_tomato_exit_cb(lv_event_t* e) {
   DeviceStateMachine::getInstance().postEvent(EVENT_POMODORO_STOP);
 }
 
-static void lbl_tomato_time_cb(lv_event_t* e) {
-  DeviceStateMachine::getInstance().postEvent(EVENT_POMODORO_ADJUST);
-}
+// 移除旧的 lbl_tomato_time_cb
 
 void ClassPetUI::init() {
   // 1. 初始化四个独立页面
@@ -290,22 +288,85 @@ void ClassPetUI::initDiagScreen() {
 // 3. 初始化番茄计时器工作页面 (ScreenTomato)
 // ==========================================
 void ClassPetUI::initTomatoScreen() {
-  // A. 顶部标题
-  lv_obj_t* title = lv_label_create(_scr_tomato);
+  // 移除_scr_tomato上的手势注册，防止触摸偏移被识别为手势而吃掉点击事件
+  // lv_obj_add_event_cb(_scr_tomato, gesture_event_cb, LV_EVENT_GESTURE, NULL);
+
+  // === 1. 设置界面容器 ===
+  _cont_tomato_settings = lv_obj_create(_scr_tomato);
+  lv_obj_set_size(_cont_tomato_settings, LV_PCT(100), LV_PCT(100));
+  lv_obj_set_style_bg_opa(_cont_tomato_settings, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(_cont_tomato_settings, 0, 0);
+  lv_obj_set_style_pad_all(_cont_tomato_settings, 0, 0);
+  
+  lv_obj_t* title = lv_label_create(_cont_tomato_settings);
   lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
   lv_obj_set_style_text_color(title, LV_COLOR_DANGER, 0);
   lv_obj_set_style_text_font(title, &my_font_cjk_16, 0);
-  lv_label_set_text(title, "番茄专注时间");
-  
-  // B. 中心环形大进度条 (Arc) 调小尺寸
-  _arc_tomato_progress = lv_arc_create(_scr_tomato);
+  lv_label_set_text(title, "选择专注时长");
+
+  // 添加滚轮，用户可以选择时间
+  _roller_tomato_time = lv_roller_create(_cont_tomato_settings);
+  lv_roller_set_options(_roller_tomato_time, 
+    "5\n10\n15\n20\n25\n30\n45\n60\n90\n120", 
+    LV_ROLLER_MODE_NORMAL);
+  lv_roller_set_visible_row_count(_roller_tomato_time, 3);
+  lv_obj_align(_roller_tomato_time, LV_ALIGN_CENTER, 0, -15);
+  lv_roller_set_selected(_roller_tomato_time, 4, LV_ANIM_OFF); // 默认25分钟
+
+  // “开始专注” 按钮
+  lv_obj_t* btn_start = lv_button_create(_cont_tomato_settings);
+  lv_obj_set_size(btn_start, 110, 36);
+  lv_obj_align(btn_start, LV_ALIGN_BOTTOM_RIGHT, -25, -10);
+  lv_obj_set_style_bg_color(btn_start, LV_COLOR_PRIMARY, 0);
+  lv_obj_add_event_cb(btn_start, [](lv_event_t* e) {
+    ClassPetUI& ui = ClassPetUI::getInstance();
+    lv_obj_add_flag(ui._cont_tomato_settings, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(ui._cont_tomato_timer, LV_OBJ_FLAG_HIDDEN);
+    DeviceStateMachine::getInstance().postEvent(EVENT_POMODORO_START);
+  }, LV_EVENT_CLICKED, NULL);
+
+  lv_obj_t* lbl_start = lv_label_create(btn_start);
+  lv_label_set_text(lbl_start, "开始专注");
+  lv_obj_set_style_text_font(lbl_start, &my_font_cjk_16, 0);
+  lv_obj_align(lbl_start, LV_ALIGN_CENTER, 0, 0);
+
+  // “取消” 按钮
+  lv_obj_t* btn_cancel = lv_button_create(_cont_tomato_settings);
+  lv_obj_set_size(btn_cancel, 110, 36);
+  lv_obj_align(btn_cancel, LV_ALIGN_BOTTOM_LEFT, 25, -10);
+  lv_obj_set_style_bg_color(btn_cancel, lv_color_hex(0x475569), 0);
+  lv_obj_add_event_cb(btn_cancel, [](lv_event_t* e) {
+    DeviceStateMachine::getInstance().postEvent(EVENT_POMODORO_STOP);
+  }, LV_EVENT_CLICKED, NULL);
+
+  lv_obj_t* lbl_cancel = lv_label_create(btn_cancel);
+  lv_label_set_text(lbl_cancel, "取消");
+  lv_obj_set_style_text_font(lbl_cancel, &my_font_cjk_16, 0);
+  lv_obj_align(lbl_cancel, LV_ALIGN_CENTER, 0, 0);
+
+  // === 2. 倒计时界面容器 ===
+  _cont_tomato_timer = lv_obj_create(_scr_tomato);
+  lv_obj_set_size(_cont_tomato_timer, LV_PCT(100), LV_PCT(100));
+  lv_obj_set_style_bg_opa(_cont_tomato_timer, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(_cont_tomato_timer, 0, 0);
+  lv_obj_set_style_pad_all(_cont_tomato_timer, 0, 0);
+  lv_obj_add_flag(_cont_tomato_timer, LV_OBJ_FLAG_HIDDEN); // 默认隐藏
+
+  // 顶部标题
+  lv_obj_t* title_timer = lv_label_create(_cont_tomato_timer);
+  lv_obj_align(title_timer, LV_ALIGN_TOP_MID, 0, 10);
+  lv_obj_set_style_text_color(title_timer, LV_COLOR_DANGER, 0);
+  lv_obj_set_style_text_font(title_timer, &my_font_cjk_16, 0);
+  lv_label_set_text(title_timer, "番茄专注时间");
+
+  // 中心环形大进度条
+  _arc_tomato_progress = lv_arc_create(_cont_tomato_timer);
   lv_obj_set_size(_arc_tomato_progress, 130, 130);
   lv_obj_align(_arc_tomato_progress, LV_ALIGN_CENTER, 0, -20);
-  lv_arc_set_rotation(_arc_tomato_progress, 270); // 从12点钟方向开始
+  lv_arc_set_rotation(_arc_tomato_progress, 270); 
   lv_arc_set_bg_angles(_arc_tomato_progress, 0, 360);
-  lv_obj_remove_style(_arc_tomato_progress, NULL, LV_PART_KNOB); // 移除旋钮
+  lv_obj_remove_style(_arc_tomato_progress, NULL, LV_PART_KNOB); 
   lv_obj_clear_flag(_arc_tomato_progress, LV_OBJ_FLAG_CLICKABLE);
-  
   lv_obj_set_style_arc_width(_arc_tomato_progress, 12, LV_PART_MAIN);
   lv_obj_set_style_arc_color(_arc_tomato_progress, LV_COLOR_BORDER, LV_PART_MAIN);
   lv_obj_set_style_arc_width(_arc_tomato_progress, 12, LV_PART_INDICATOR);
@@ -314,31 +375,25 @@ void ClassPetUI::initTomatoScreen() {
   lv_arc_set_range(_arc_tomato_progress, 0, 100);
   lv_arc_set_value(_arc_tomato_progress, 100);
   
-  // C. 番茄钟宠物动画 (置于圆环中央偏上)
-  _gif_tomato_pet = lv_gif_create(_scr_tomato);
-  lv_obj_align(_gif_tomato_pet, LV_ALIGN_CENTER, 0, -35); // 位于圆环内稍靠上
-  
-  // D. 进度倒计时字样 (移到圆环内稍靠下)
-  _lbl_tomato_time = lv_label_create(_scr_tomato);
-  lv_obj_align(_lbl_tomato_time, LV_ALIGN_CENTER, 0, 10);
+  // 进度倒计时字样 (完全居中)
+  _lbl_tomato_time = lv_label_create(_cont_tomato_timer);
+  lv_obj_align(_lbl_tomato_time, LV_ALIGN_CENTER, 0, -20); // 放在圆圈中心
   lv_obj_set_style_text_color(_lbl_tomato_time, LV_COLOR_TEXT, 0);
   lv_obj_set_style_text_font(_lbl_tomato_time, &lv_font_montserrat_24, 0);
   lv_label_set_text(_lbl_tomato_time, "25:00");
-  lv_obj_add_flag(_lbl_tomato_time, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_add_event_cb(_lbl_tomato_time, lbl_tomato_time_cb, LV_EVENT_CLICKED, NULL);
   
-  // D. 专注状态小字 (移到圆环下方)
-  _lbl_tomato_status = lv_label_create(_scr_tomato);
+  // 专注状态小字 (移到圆环下方)
+  _lbl_tomato_status = lv_label_create(_cont_tomato_timer);
   lv_obj_align(_lbl_tomato_status, LV_ALIGN_CENTER, 0, 60);
   lv_obj_set_style_text_color(_lbl_tomato_status, LV_COLOR_TEXT_MUTED, 0);
   lv_obj_set_style_text_font(_lbl_tomato_status, &my_font_cjk_16, 0);
   lv_label_set_text(_lbl_tomato_status, "努力专注学习中...");
   
-  // E. 底部操作按键 (暂停/继续，退出专注)
-  lv_obj_t* btn_pause = lv_button_create(_scr_tomato);
+  // 底部操作按键 (暂停/继续，退出专注)
+  lv_obj_t* btn_pause = lv_button_create(_cont_tomato_timer);
   lv_obj_set_size(btn_pause, 110, 36);
   lv_obj_align(btn_pause, LV_ALIGN_BOTTOM_LEFT, 25, -10);
-  lv_obj_set_style_bg_color(btn_pause, lv_color_hex(0x475569), 0); // 灰蓝色
+  lv_obj_set_style_bg_color(btn_pause, lv_color_hex(0x475569), 0);
   lv_obj_set_style_bg_opa(btn_pause, LV_OPA_COVER, 0);
   lv_obj_set_style_radius(btn_pause, 8, 0);
   lv_obj_add_event_cb(btn_pause, btn_tomato_pause_cb, LV_EVENT_CLICKED, NULL);
@@ -348,10 +403,10 @@ void ClassPetUI::initTomatoScreen() {
   lv_obj_set_style_text_font(lbl_p, &my_font_cjk_16, 0);
   lv_obj_align(lbl_p, LV_ALIGN_CENTER, 0, 0);
   
-  lv_obj_t* btn_exit = lv_button_create(_scr_tomato);
+  lv_obj_t* btn_exit = lv_button_create(_cont_tomato_timer);
   lv_obj_set_size(btn_exit, 110, 36);
   lv_obj_align(btn_exit, LV_ALIGN_BOTTOM_RIGHT, -25, -10);
-  lv_obj_set_style_bg_color(btn_exit, LV_COLOR_DANGER, 0); // 红色
+  lv_obj_set_style_bg_color(btn_exit, LV_COLOR_DANGER, 0);
   lv_obj_set_style_bg_opa(btn_exit, LV_OPA_COVER, 0);
   lv_obj_set_style_radius(btn_exit, 8, 0);
   lv_obj_add_event_cb(btn_exit, btn_tomato_exit_cb, LV_EVENT_CLICKED, NULL);
@@ -360,6 +415,21 @@ void ClassPetUI::initTomatoScreen() {
   lv_label_set_text(lbl_e, "退出专注");
   lv_obj_set_style_text_font(lbl_e, &my_font_cjk_16, 0);
   lv_obj_align(lbl_e, LV_ALIGN_CENTER, 0, 0);
+}
+
+uint32_t ClassPetUI::getSelectedTomatoTime() {
+  if (_roller_tomato_time) {
+    char buf[16];
+    lv_roller_get_selected_str(_roller_tomato_time, buf, sizeof(buf));
+    return String(buf).toInt();
+  }
+  return 25;
+}
+
+void ClassPetUI::showTomatoSettings() {
+  lv_obj_clear_flag(_cont_tomato_settings, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(_cont_tomato_timer, LV_OBJ_FLAG_HIDDEN);
+  loadScreen(_scr_tomato);
 }
 
 // ==========================================
@@ -420,7 +490,7 @@ void ClassPetUI::initMenuScreen() {
   lv_obj_add_event_cb(btn_tomato, btn_tomato_cb, LV_EVENT_CLICKED, NULL);
   
   lv_obj_t* lbl_t = lv_label_create(btn_tomato);
-  lv_label_set_text(lbl_t, "启动番茄钟");
+  lv_label_set_text(lbl_t, "番茄时钟");
   lv_obj_set_style_text_color(lbl_t, lv_color_hex(0xFFFFFF), 0);
   lv_obj_set_style_text_font(lbl_t, &my_font_cjk_16, 0);
   lv_obj_center(lbl_t);
@@ -505,9 +575,9 @@ void ClassPetUI::showNormalScreen(const String& name, int points, int level, int
     lv_bar_set_value(_bar_normal_exp, pct, LV_ANIM_ON);
   }
   
-  // 防止在菜单页或待机页时，被后台数据刷新强制拉回主页（闪退现象）
+  // 防止在菜单页、待机页、番茄钟页时，被后台数据刷新强制拉回主页（闪退现象）
   lv_obj_t* active_scr = lv_screen_active();
-  if (active_scr != _scr_menu && active_scr != _scr_standby) {
+  if (active_scr != _scr_menu && active_scr != _scr_standby && active_scr != _scr_tomato) {
     loadScreen(_scr_normal);
   }
 }
@@ -583,11 +653,8 @@ void ClassPetUI::showTomatoScreen(int remainingSec, int percent, bool isPaused) 
   lv_label_set_text(_lbl_tomato_time, timeBuf);
   
   lv_arc_set_value(_arc_tomato_progress, percent);
-  
-  // 确保宠物 GIF 数据是最新的（从主屏幕的 _gif_dsc 共享缓冲）
-  if (_gif_dsc.data != NULL && lv_img_get_src(_gif_tomato_pet) != &_gif_dsc) {
-    lv_gif_set_src(_gif_tomato_pet, &_gif_dsc);
-  }
+    // （宠物 GIF 已从番茄钟界面移除，避免遮挡时间）
+
 
   
   if (isPaused) {
@@ -645,6 +712,10 @@ void ClassPetUI::loadScreen(lv_obj_t* scr) {
   if (lv_screen_active() != scr) {
     lv_screen_load(scr);
   }
+}
+
+void ClassPetUI::forceSwitchToNormal() {
+  loadScreen(_scr_normal);
 }
 
 void ClassPetUI::setPetGif(const void* data, size_t size) {

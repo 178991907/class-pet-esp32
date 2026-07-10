@@ -16,6 +16,7 @@
 // 系统交互事件
 enum DeviceEvent {
   EVENT_NONE,
+  EVENT_POMODORO_SETTINGS,
   EVENT_POMODORO_START,
   EVENT_POMODORO_STOP,
   EVENT_POMODORO_PAUSE_RESUME,
@@ -41,7 +42,7 @@ public:
   
 private:
   DeviceStateMachine() : _state(STATE_CONNECTING_WIFI), _queue(nullptr), 
-    _pet_gif_buffer(nullptr), _pet_gif_size(0) {}
+    _pet_gif_buffer(nullptr), _pet_gif_size(0), _last_sync_time(0) {}
   
   DeviceState _state;
   QueueHandle_t _queue;
@@ -58,6 +59,7 @@ private:
   void loadPetGif(const String& petType, int petLevel);
   
   uint32_t _state_start_time;
+  uint32_t _last_sync_time;
 };
 
 #endif // DEVICE_STATE_MACHINE_H
