@@ -2,6 +2,9 @@ import { Router } from 'express'
 import { v4 as uuidv4 } from 'uuid'
 import multer from 'multer'
 import express from 'express'
+import fs from 'fs'
+import path from 'path'
+import { fileURLToPath } from 'url'
 
 import { getAsync, allAsync, runAsync } from '../db.js'
 import { calculateLevel } from '../utils/level.js'
@@ -626,6 +629,19 @@ router.get('/chat-logs/student/:studentId', authMiddleware, async (req, res) => 
     console.error('获取对话记录失败:', error)
     res.status(500).json({ error: '获取对话记录失败' })
   }
+})
+
+// 提供中文字库 cjk16.bin 下载 (固件首次启动自动拉取, 无需手动拷贝)
+router.get('/font/cjk16.bin', (req, res) => {
+  const fontPath = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fonts', 'cjk16.bin')
+  if (!fs.existsSync(fontPath)) {
+    return res.status(404).send('font not found')
+  }
+  const stat = fs.statSync(fontPath)
+  res.setHeader('Content-Type', 'application/octet-stream')
+  res.setHeader('Content-Length', stat.size)
+  res.setHeader('Cache-Control', 'public, max-age=86400')
+  fs.createReadStream(fontPath).pipe(res)
 })
 
 export default router

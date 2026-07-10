@@ -7,9 +7,75 @@
 #include "ClassPetUI.h"
 #include "LcdDisplay.h"
 #include "DeviceStateMachine.h"
+#include "Config.h"
+#include "ApiClient.h"
+#include <SD_MMC.h>
+#include <esp_heap_caps.h>
+#include <vector>
 
-// 声明外部自定义中文字库 (包含3500常用字 + ASCII + 常用Emoji)
-LV_FONT_DECLARE(my_font_cjk_16);
+// 中文字库不再编译进固件 (会导致 bin 超过 3MB 分区, 出现方块/烧录失败)。
+// 改为运行时从 TF 卡 /cjk16.bin 加载。参考小智 AI 思路: 字库与固件分离,
+// 存放在独立存储(TF 卡), 启动后载入内存(PSRAM)供 LVGL 使用。
+static const lv_font_t* g_cjk_font = nullptr;
+
+// LVGL 9 的 binfont 加载器未通过 lvgl.h 导出, 这里直接声明其 C 链接原型
+extern "C" {
+    void lv_fs_memfs_init(void);
+    lv_font_t* lv_binfont_create_from_buffer(void* buffer, uint32_t size);
+}
+
+// 返回当前中文字体; 若 TF 卡字库尚未加载成功, 回退到内置默认字体(中文可能显示为方块)
+static inline const lv_font_t* cjkFont() {
+    return g_cjk_font ? g_cjk_font : LV_FONT_DEFAULT;
+}
+
+// 所有需要中文显示的标签都登记到这里, 字库下载完成后可统一刷新
+// is_cjk 标记该标签用的是 cjkFont() (可能因字库下载而需刷新); 其它标签(如数字用 montserrat)保持原字体
+struct CjkLabelEntry { lv_obj_t* obj; const lv_font_t* font; int part; bool is_cjk; };
+static std::vector<CjkLabelEntry> s_cjk_labels;
+static void setCjkFont(lv_obj_t* obj, const lv_font_t* font, int part) {
+    if (!obj) return;
+    lv_obj_set_style_text_font(obj, font, part);
+    s_cjk_labels.push_back({obj, font, part, (font == LV_FONT_DEFAULT)});
+}
+
+// 从 TF 卡读取 /cjk16.bin 到 PSRAM, 再用 LVGL binfont 加载器在内存中重建字体对象。
+// 注意: 加载成功后缓冲区由 LVGL 内存文件系统持有引用, 必须常驻、不可释放。
+static void loadCjkFontFromSD() {
+    const char* fontPath = "/cjk16.bin";
+    if (!SD_MMC.exists(fontPath)) {
+        DEBUG_PRINTLN("⚠️ [字体] TF 卡根目录未找到 /cjk16.bin，将使用内置默认字体（中文可能显示为方块）。请把 cjk16.bin 拷贝到 TF 卡。");
+        return;
+    }
+    fs::File f = SD_MMC.open(fontPath, FILE_READ);
+    if (!f) { DEBUG_PRINTLN("⚠️ [字体] 打开 /cjk16.bin 失败"); return; }
+    size_t sz = f.size();
+    uint8_t* buf = (uint8_t*)heap_caps_malloc(sz, MALLOC_CAP_SPIRAM);
+    if (!buf) { DEBUG_PRINTLN("⚠️ [字体] PSRAM 分配失败，无法加载字库"); f.close(); return; }
+    if (f.read(buf, sz) != (int)sz) {
+        DEBUG_PRINTLN("⚠️ [字体] 读取 /cjk16.bin 不完整");
+        heap_caps_free(buf); f.close(); return;
+    }
+    f.close();
+    g_cjk_font = lv_binfont_create_from_buffer(buf, sz);
+    if (g_cjk_font) {
+        DEBUG_PRINTF("✅ [字体] 已从 TF 卡加载中文字库 (%u 字节，常驻 PSRAM)\n", sz);
+    } else {
+        DEBUG_PRINTLN("⚠️ [字体] lv_binfont_create_from_buffer 失败");
+        heap_caps_free(buf);
+    }
+}
+
+// 字库下载完成后由 DeviceStateMachine 调用: 重新从 SD 加载并刷新所有中文标签
+void ClassPetUI::reloadCjkFont() {
+    loadCjkFontFromSD();  // 若 SD 已有 cjk16.bin (刚下载完), 会重建 g_cjk_font
+    for (auto& e : s_cjk_labels) {
+        // 仅当该标签原本使用 cjkFont() (内置子集/完整字库) 时才刷新为新字库;
+        // 数字等使用 montserrat 的标签保持原字体不变
+        lv_obj_set_style_text_font(e.obj, e.is_cjk ? cjkFont() : e.font, e.part);
+    }
+    DEBUG_PRINTF("🔄 [字体] 已刷新 %u 个标签\n", (unsigned)s_cjk_labels.size());
+}
 
 // ==========================================
 // 核心调色板 (和 Tailwind 统一视觉系统 - 适配亮色主题以匹配网页端)
@@ -44,6 +110,10 @@ static void btn_tomato_exit_cb(lv_event_t* e) {
 // 移除旧的 lbl_tomato_time_cb
 
 void ClassPetUI::init() {
+  // 0. 注册 LVGL 内存文件系统驱动, 并从 TF 卡加载中文字库
+  lv_fs_memfs_init();
+  loadCjkFontFromSD();
+
   // 1. 初始化四个独立页面
   _scr_normal = lv_obj_create(NULL);
   _scr_diag = lv_obj_create(NULL);
@@ -84,7 +154,7 @@ void ClassPetUI::init() {
   lv_label_set_text(_toast_label, "");
   lv_obj_set_style_text_color(_toast_label, LV_COLOR_TEXT, 0);
   lv_obj_set_style_text_align(_toast_label, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(_toast_label, &my_font_cjk_16, 0); // 设置中文字体
+  setCjkFont(_toast_label, cjkFont(), 0); // 设置中文字体
   lv_obj_align(_toast_label, LV_ALIGN_CENTER, 0, 0);
   
   lv_obj_add_flag(_toast_container, LV_OBJ_FLAG_HIDDEN); // 默认隐藏
@@ -119,7 +189,7 @@ void ClassPetUI::initNormalScreen() {
   lv_obj_set_size(_lbl_normal_wifi, 220, 18);
   lv_label_set_long_mode(_lbl_normal_wifi, LV_LABEL_LONG_DOT);
   lv_obj_set_style_text_color(_lbl_normal_wifi, LV_COLOR_SUCCESS, 0);
-  lv_obj_set_style_text_font(_lbl_normal_wifi, &my_font_cjk_16, 0);
+  setCjkFont(_lbl_normal_wifi, cjkFont(), 0);
   lv_label_set_text(_lbl_normal_wifi, "未连接");
   
   // A. 顶部状态栏 - 电池外框 (右对齐)
@@ -149,20 +219,20 @@ void ClassPetUI::initNormalScreen() {
   _lbl_normal_battery = lv_label_create(_bar_battery);
   lv_obj_center(_lbl_normal_battery);
   lv_obj_set_style_text_color(_lbl_normal_battery, lv_color_hex(0x222222), 0);
-  lv_obj_set_style_text_font(_lbl_normal_battery, &my_font_cjk_16, 0);
+  setCjkFont(_lbl_normal_battery, cjkFont(), 0);
   lv_label_set_text(_lbl_normal_battery, "100%");
   
   // B. 正常屏幕时钟 (同行显示)
   _lbl_time = lv_label_create(_scr_normal);
   lv_obj_align(_lbl_time, LV_ALIGN_TOP_MID, -70, 35);
   lv_obj_set_style_text_color(_lbl_time, LV_COLOR_TEXT, 0);
-  lv_obj_set_style_text_font(_lbl_time, &lv_font_montserrat_24, 0);
+  setCjkFont(_lbl_time, &lv_font_montserrat_24, 0);
   lv_label_set_text(_lbl_time, "00:00");
   
   _lbl_date = lv_label_create(_scr_normal);
   lv_obj_align(_lbl_date, LV_ALIGN_TOP_MID, 40, 41);
   lv_obj_set_style_text_color(_lbl_date, LV_COLOR_TEXT_MUTED, 0);
-  lv_obj_set_style_text_font(_lbl_date, &my_font_cjk_16, 0);
+  setCjkFont(_lbl_date, cjkFont(), 0);
   lv_label_set_text(_lbl_date, "1月1日 星期一");
 
   // C. 宠物大卡片 (居中略微靠下)
@@ -182,21 +252,21 @@ void ClassPetUI::initNormalScreen() {
   _lbl_normal_name = lv_label_create(card);
   lv_obj_align(_lbl_normal_name, LV_ALIGN_TOP_LEFT, 130, 22);
   lv_obj_set_style_text_color(_lbl_normal_name, LV_COLOR_TEXT, 0);
-  lv_obj_set_style_text_font(_lbl_normal_name, &my_font_cjk_16, 0);
+  setCjkFont(_lbl_normal_name, cjkFont(), 0);
   lv_label_set_text(_lbl_normal_name, "加载中...");
   
   // 等级 & 积分标签
   _lbl_normal_lv = lv_label_create(card);
   lv_obj_align(_lbl_normal_lv, LV_ALIGN_TOP_LEFT, 130, 48);
   lv_obj_set_style_text_color(_lbl_normal_lv, LV_COLOR_WARNING, 0);
-  lv_obj_set_style_text_font(_lbl_normal_lv, &my_font_cjk_16, 0);
+  setCjkFont(_lbl_normal_lv, cjkFont(), 0);
   lv_label_set_text(_lbl_normal_lv, "Lv.1 | 积分: 0");
   
   // 经验文字
   _lbl_normal_exp = lv_label_create(card);
   lv_obj_align(_lbl_normal_exp, LV_ALIGN_TOP_LEFT, 130, 75);
   lv_obj_set_style_text_color(_lbl_normal_exp, LV_COLOR_TEXT_MUTED, 0);
-  lv_obj_set_style_text_font(_lbl_normal_exp, &my_font_cjk_16, 0);
+  setCjkFont(_lbl_normal_exp, cjkFont(), 0);
   lv_label_set_text(_lbl_normal_exp, "经验: 0 / 40");
   
   // 经验条
@@ -212,7 +282,7 @@ void ClassPetUI::initNormalScreen() {
   lv_obj_t* hint = lv_label_create(_scr_normal);
   lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -3);
   lv_obj_set_style_text_color(hint, LV_COLOR_TEXT_MUTED, 0);
-  lv_obj_set_style_text_font(hint, &my_font_cjk_16, 0);
+  setCjkFont(hint, cjkFont(), 0);
   lv_label_set_text(hint, "^ 上滑展开菜单");
 }
 
@@ -224,7 +294,7 @@ void ClassPetUI::initDiagScreen() {
   lv_obj_t* title = lv_label_create(_scr_diag);
   lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 8);
   lv_obj_set_style_text_color(title, LV_COLOR_PRIMARY, 0);
-  lv_obj_set_style_text_font(title, &my_font_cjk_16, 0);
+  setCjkFont(title, cjkFont(), 0);
   lv_label_set_text(title, "设备自检自愈中心");
   
   // B. 中心诊断参数框 (Grid-like list)
@@ -240,32 +310,32 @@ void ClassPetUI::initDiagScreen() {
   // 核心指标
   _lbl_diag_wifi = lv_label_create(frame);
   lv_obj_set_pos(_lbl_diag_wifi, 10, 5);
-  lv_obj_set_style_text_font(_lbl_diag_wifi, &my_font_cjk_16, 0);
+  setCjkFont(_lbl_diag_wifi, cjkFont(), 0);
   lv_label_set_text(_lbl_diag_wifi, "WiFi 状态: 连接中...");
   
   _lbl_diag_ip = lv_label_create(frame);
   lv_obj_set_pos(_lbl_diag_ip, 10, 25);
-  lv_obj_set_style_text_font(_lbl_diag_ip, &my_font_cjk_16, 0);
+  setCjkFont(_lbl_diag_ip, cjkFont(), 0);
   lv_label_set_text(_lbl_diag_ip, "本地 IP: 0.0.0.0");
   
   _lbl_diag_domain = lv_label_create(frame);
   lv_obj_set_pos(_lbl_diag_domain, 10, 45);
-  lv_obj_set_style_text_font(_lbl_diag_domain, &my_font_cjk_16, 0);
+  setCjkFont(_lbl_diag_domain, cjkFont(), 0);
   lv_label_set_text(_lbl_diag_domain, "服务器: pete.qqzy.de5.net");
   
   _lbl_diag_resolved = lv_label_create(frame);
   lv_obj_set_pos(_lbl_diag_resolved, 10, 65);
-  lv_obj_set_style_text_font(_lbl_diag_resolved, &my_font_cjk_16, 0);
+  setCjkFont(_lbl_diag_resolved, cjkFont(), 0);
   lv_label_set_text(_lbl_diag_resolved, "DNS 解析: 获取中...");
   
   _lbl_diag_http = lv_label_create(frame);
   lv_obj_set_pos(_lbl_diag_http, 10, 85);
-  lv_obj_set_style_text_font(_lbl_diag_http, &my_font_cjk_16, 0);
+  setCjkFont(_lbl_diag_http, cjkFont(), 0);
   lv_label_set_text(_lbl_diag_http, "HTTP 状态: 0");
   
   _lbl_diag_tls = lv_label_create(frame);
   lv_obj_set_pos(_lbl_diag_tls, 10, 105);
-  lv_obj_set_style_text_font(_lbl_diag_tls, &my_font_cjk_16, 0);
+  setCjkFont(_lbl_diag_tls, cjkFont(), 0);
   lv_label_set_text(_lbl_diag_tls, "TLS 握手: 等待中");
   
   // C. 底部智能排障指南文字/设备 MAC 地址区域
@@ -274,13 +344,13 @@ void ClassPetUI::initDiagScreen() {
   lv_obj_align(_lbl_diag_sugg, LV_ALIGN_BOTTOM_MID, 0, -22);
   lv_obj_set_style_text_color(_lbl_diag_sugg, LV_COLOR_WARNING, 0);
   lv_obj_set_style_text_align(_lbl_diag_sugg, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(_lbl_diag_sugg, &my_font_cjk_16, 0);
+  setCjkFont(_lbl_diag_sugg, cjkFont(), 0);
   lv_label_set_text(_lbl_diag_sugg, "系统自愈中，请稍候...");
   
   _lbl_diag_mac = lv_label_create(_scr_diag);
   lv_obj_align(_lbl_diag_mac, LV_ALIGN_BOTTOM_MID, 0, -4);
   lv_obj_set_style_text_color(_lbl_diag_mac, LV_COLOR_TEXT_MUTED, 0);
-  lv_obj_set_style_text_font(_lbl_diag_mac, &my_font_cjk_16, 0);
+  setCjkFont(_lbl_diag_mac, cjkFont(), 0);
   lv_label_set_text(_lbl_diag_mac, "MAC: FF:FF:FF:FF:FF:FF");
 }
 
@@ -301,7 +371,7 @@ void ClassPetUI::initTomatoScreen() {
   lv_obj_t* title = lv_label_create(_cont_tomato_settings);
   lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 10);
   lv_obj_set_style_text_color(title, LV_COLOR_DANGER, 0);
-  lv_obj_set_style_text_font(title, &my_font_cjk_16, 0);
+  setCjkFont(title, cjkFont(), 0);
   lv_label_set_text(title, "选择专注时长");
 
   // 添加滚轮，用户可以选择时间
@@ -327,7 +397,7 @@ void ClassPetUI::initTomatoScreen() {
 
   lv_obj_t* lbl_start = lv_label_create(btn_start);
   lv_label_set_text(lbl_start, "开始专注");
-  lv_obj_set_style_text_font(lbl_start, &my_font_cjk_16, 0);
+  setCjkFont(lbl_start, cjkFont(), 0);
   lv_obj_align(lbl_start, LV_ALIGN_CENTER, 0, 0);
 
   // “取消” 按钮
@@ -341,7 +411,7 @@ void ClassPetUI::initTomatoScreen() {
 
   lv_obj_t* lbl_cancel = lv_label_create(btn_cancel);
   lv_label_set_text(lbl_cancel, "取消");
-  lv_obj_set_style_text_font(lbl_cancel, &my_font_cjk_16, 0);
+  setCjkFont(lbl_cancel, cjkFont(), 0);
   lv_obj_align(lbl_cancel, LV_ALIGN_CENTER, 0, 0);
 
   // === 2. 倒计时界面容器 ===
@@ -356,7 +426,7 @@ void ClassPetUI::initTomatoScreen() {
   lv_obj_t* title_timer = lv_label_create(_cont_tomato_timer);
   lv_obj_align(title_timer, LV_ALIGN_TOP_MID, 0, 10);
   lv_obj_set_style_text_color(title_timer, LV_COLOR_DANGER, 0);
-  lv_obj_set_style_text_font(title_timer, &my_font_cjk_16, 0);
+  setCjkFont(title_timer, cjkFont(), 0);
   lv_label_set_text(title_timer, "番茄专注时间");
 
   // 中心环形大进度条
@@ -379,14 +449,14 @@ void ClassPetUI::initTomatoScreen() {
   _lbl_tomato_time = lv_label_create(_cont_tomato_timer);
   lv_obj_align(_lbl_tomato_time, LV_ALIGN_CENTER, 0, -20); // 放在圆圈中心
   lv_obj_set_style_text_color(_lbl_tomato_time, LV_COLOR_TEXT, 0);
-  lv_obj_set_style_text_font(_lbl_tomato_time, &lv_font_montserrat_24, 0);
+  setCjkFont(_lbl_tomato_time, &lv_font_montserrat_24, 0);
   lv_label_set_text(_lbl_tomato_time, "25:00");
   
   // 专注状态小字 (移到圆环下方)
   _lbl_tomato_status = lv_label_create(_cont_tomato_timer);
   lv_obj_align(_lbl_tomato_status, LV_ALIGN_CENTER, 0, 60);
   lv_obj_set_style_text_color(_lbl_tomato_status, LV_COLOR_TEXT_MUTED, 0);
-  lv_obj_set_style_text_font(_lbl_tomato_status, &my_font_cjk_16, 0);
+  setCjkFont(_lbl_tomato_status, cjkFont(), 0);
   lv_label_set_text(_lbl_tomato_status, "努力专注学习中...");
   
   // 底部操作按键 (暂停/继续，退出专注)
@@ -400,7 +470,7 @@ void ClassPetUI::initTomatoScreen() {
   
   lv_obj_t* lbl_p = lv_label_create(btn_pause);
   lv_label_set_text(lbl_p, "暂停/继续");
-  lv_obj_set_style_text_font(lbl_p, &my_font_cjk_16, 0);
+  setCjkFont(lbl_p, cjkFont(), 0);
   lv_obj_align(lbl_p, LV_ALIGN_CENTER, 0, 0);
   
   lv_obj_t* btn_exit = lv_button_create(_cont_tomato_timer);
@@ -413,7 +483,7 @@ void ClassPetUI::initTomatoScreen() {
   
   lv_obj_t* lbl_e = lv_label_create(btn_exit);
   lv_label_set_text(lbl_e, "退出专注");
-  lv_obj_set_style_text_font(lbl_e, &my_font_cjk_16, 0);
+  setCjkFont(lbl_e, cjkFont(), 0);
   lv_obj_align(lbl_e, LV_ALIGN_CENTER, 0, 0);
 }
 
@@ -441,7 +511,7 @@ void ClassPetUI::initProcessingScreen() {
   lv_obj_align(_lbl_proc_text, LV_ALIGN_CENTER, 0, -25);
   lv_obj_set_style_text_color(_lbl_proc_text, LV_COLOR_TEXT, 0);
   lv_obj_set_style_text_align(_lbl_proc_text, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_set_style_text_font(_lbl_proc_text, &my_font_cjk_16, 0);
+  setCjkFont(_lbl_proc_text, cjkFont(), 0);
   lv_label_set_text(_lbl_proc_text, "正在上传数据...");
   
   // B. 漂亮的加载环
@@ -479,7 +549,7 @@ void ClassPetUI::initMenuScreen() {
   lv_obj_t* title = lv_label_create(_scr_menu);
   lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 30);
   lv_obj_set_style_text_color(title, LV_COLOR_TEXT, 0);
-  lv_obj_set_style_text_font(title, &my_font_cjk_16, 0);
+  setCjkFont(title, cjkFont(), 0);
   lv_label_set_text(title, "功能菜单");
 
   lv_obj_t* btn_tomato = lv_button_create(_scr_menu);
@@ -492,7 +562,7 @@ void ClassPetUI::initMenuScreen() {
   lv_obj_t* lbl_t = lv_label_create(btn_tomato);
   lv_label_set_text(lbl_t, "番茄时钟");
   lv_obj_set_style_text_color(lbl_t, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_set_style_text_font(lbl_t, &my_font_cjk_16, 0);
+  setCjkFont(lbl_t, cjkFont(), 0);
   lv_obj_center(lbl_t);
   
   lv_obj_t* btn_voice = lv_button_create(_scr_menu);
@@ -505,13 +575,13 @@ void ClassPetUI::initMenuScreen() {
   lv_obj_t* lbl_v = lv_label_create(btn_voice);
   lv_label_set_text(lbl_v, "语音申报");
   lv_obj_set_style_text_color(lbl_v, lv_color_hex(0xFFFFFF), 0);
-  lv_obj_set_style_text_font(lbl_v, &my_font_cjk_16, 0);
+  setCjkFont(lbl_v, cjkFont(), 0);
   lv_obj_center(lbl_v);
 
   lv_obj_t* hint = lv_label_create(_scr_menu);
   lv_obj_align(hint, LV_ALIGN_TOP_MID, 0, 5);
   lv_obj_set_style_text_color(hint, LV_COLOR_TEXT_MUTED, 0);
-  lv_obj_set_style_text_font(hint, &my_font_cjk_16, 0);
+  setCjkFont(hint, cjkFont(), 0);
   lv_label_set_text(hint, "v 下滑返回主页");
 }
 
@@ -527,7 +597,7 @@ void ClassPetUI::initStandbyScreen() {
   _lbl_standby_time = lv_label_create(_scr_standby);
   lv_obj_align(_lbl_standby_time, LV_ALIGN_CENTER, 0, -10);
   lv_obj_set_style_text_color(_lbl_standby_time, lv_color_white(), 0);
-  lv_obj_set_style_text_font(_lbl_standby_time, &lv_font_montserrat_24, 0);
+  setCjkFont(_lbl_standby_time, &lv_font_montserrat_24, 0);
   lv_obj_set_style_transform_scale(_lbl_standby_time, 512, 0); // 放大2倍 (256 * 2)
   lv_obj_add_flag(_lbl_standby_time, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
   lv_label_set_text(_lbl_standby_time, "00:00");
@@ -535,7 +605,7 @@ void ClassPetUI::initStandbyScreen() {
   _lbl_standby_date = lv_label_create(_scr_standby);
   lv_obj_align(_lbl_standby_date, LV_ALIGN_CENTER, 0, 15);
   lv_obj_set_style_text_color(_lbl_standby_date, lv_color_hex(0xcccccc), 0);
-  lv_obj_set_style_text_font(_lbl_standby_date, &my_font_cjk_16, 0);
+  setCjkFont(_lbl_standby_date, cjkFont(), 0);
   lv_obj_set_style_transform_scale(_lbl_standby_date, 512, 0); // 放大2倍
   lv_obj_add_flag(_lbl_standby_date, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
   lv_label_set_text(_lbl_standby_date, "1月1日 星期一");

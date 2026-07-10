@@ -41,11 +41,17 @@ public:
   // 7. 检查当前是否仍在播放中
   virtual bool isPlaying() = 0;
 
+  // 7.5 检查当前是否正在录音
+  virtual bool isRecording() { return false; }
+
   // 8. 调整播放音量 (0 - 100)
   virtual void setVolume(int volume) = 0;
 
   // 9. 核心非阻塞刷新方法，若底层不支持后台多线程，则需在主 loop 中不断调用此接口
   virtual void update() = 0;
+
+  // 10. 直接 I2S 音调测试（诊断用，绕过 Audio 库验证硬件链路）
+  virtual void playTestTone(int frequency = 1000, int duration_ms = 2000) {}
 };
 
 /* 

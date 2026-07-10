@@ -35,6 +35,10 @@ static const LiPoCurve lipo_curve[] = {
   {3.20f, 0}
 };
 
+// 串口诊断模式标志 (定义在 ClassPetDevice.ino 中)
+// 当为 true 时，状态机不应操作 I2S 驱动，避免与串口诊断命令并发冲突
+extern volatile bool serial_diag_active;
+
 // 内部函数：读取并计算电池电量
 static void getBatteryStatus(int& pct, bool& isCharging) {
   // 多次采样求平均以过滤高频噪声
@@ -216,6 +220,11 @@ void DeviceStateMachine::handleEvent(DeviceEvent ev) {
       
     case EVENT_VOICE_START:
       if (_state == STATE_NORMAL_ONLINE) {
+        // 如果串口诊断模式正在使用 I2S，拒绝进入录音状态
+        if (serial_diag_active) {
+          DEBUG_PRINTLN("⚠️ [状态机] 串口诊断模式正在使用音频硬件，跳过语音录制请求");
+          break;
+        }
         DEBUG_PRINTLN("🎙️ [状态机] 收到事件: 启动语音模拟对话");
         _state = STATE_RECORDING;
       }

@@ -36,6 +36,10 @@ static const LiPoCurve lipo_curve[] = {
   {3.20f, 0}
 };
 
+// 串口诊断模式标志 (定义在 ClassPetDevice.ino 中)
+// 当为 true 时，状态机不应操作 I2S 驱动，避免与串口诊断命令并发冲突
+extern volatile bool serial_diag_active;
+
 // 内部函数：读取并计算电池电量
 static void getBatteryStatus(int& pct, bool& isCharging) {
   // 多次采样求平均以过滤高频噪声
@@ -217,6 +221,11 @@ void DeviceStateMachine::handleEvent(DeviceEvent ev) {
       
     case EVENT_VOICE_START:
       if (_state == STATE_NORMAL_ONLINE) {
+        // 如果串口诊断模式正在使用 I2S，拒绝进入录音状态
+        if (serial_diag_active) {
+          DEBUG_PRINTLN("⚠️ [状态机] 串口诊断模式正在使用音频硬件，跳过语音录制请求");
+          break;
+        }
         DEBUG_PRINTLN("🎙️ [状态机] 收到事件: 启动语音模拟对话");
         _state = STATE_RECORDING;
       }
@@ -265,6 +274,11 @@ void DeviceStateMachine::handleEvent(DeviceEvent ev) {
 // 状态周期轮询器 (State Poller)
 // ==========================================
 void DeviceStateMachine::loopState() {
+  static DeviceState last_state = (DeviceState)255;
+  if (_state != last_state) {
+    _state_start_time = millis();
+    last_state = _state;
+  }
   static unsigned long lastOfflineCheck = 0;
   
   switch (_state) {
@@ -288,7 +302,12 @@ void DeviceStateMachine::loopState() {
           proxy = "ProxyIP.CMLiussss.net"; // 默认使用优选代理域名
         }
         ApiClient::init(deviceConfig.server_url, deviceConfig.device_secret, proxy);
-        
+
+        // 首次启动自动从服务器下载中文字库到 TF 卡 (无需手动拷贝)
+        if (ApiClient::downloadCjkFont()) {
+            ClassPetUI::getInstance().reloadCjkFont();
+        }
+
         LVGL_LOCK();
         ClassPetUI::getInstance().showProcessingScreen("WiFi Connected. Syncing...");
         LVGL_UNLOCK();
@@ -585,7 +604,15 @@ void DeviceStateMachine::loopState() {
       LVGL_LOCK();
       ClassPetUI::getInstance().showProcessingScreen("Playing voice response...");
       LVGL_UNLOCK();
+      
+      // 1. 如果播放自然结束，或者连接失败，退出状态
       if (!audio->isPlaying()) {
+        postEvent(EVENT_VOICE_PLAY_DONE);
+      }
+      // 2. 强力超时保护：如果超过 30 秒（防止网卡死或者大模型回复过长卡死）
+      else if (millis() - _state_start_time > 30000) {
+        Serial.println("⚠️ 播放音频超时或卡死，强制退出！");
+        audio->stopAudio();
         postEvent(EVENT_VOICE_PLAY_DONE);
       }
       break;

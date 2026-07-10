@@ -27,6 +27,10 @@ DeviceConfig deviceConfig;
 AudioHAL* audio = nullptr;
 TomatoTimer tomatoTimer;
 
+// 串口诊断模式标志: 当通过串口执行 test_mic/test_speaker/test_tts 时置为 true,
+// 阻止状态机 (Core 1) 同时操作 I2S 驱动导致崩溃
+volatile bool serial_diag_active = false;
+
 // 学生核心状态缓冲区 (供 UI 层和网络同步层共享)
 String studentName = "未绑定";
 String className = "";
@@ -176,7 +180,213 @@ void setup() {
   DeviceStateMachine::getInstance().init();
 }
 
+// ==========================================
+// 6. 串口诊断命令处理器
+// ==========================================
+// 通过 USB 串口发送命令即可测试音频硬件，无需依赖网络和服务器
+// 支持命令:
+//   test_speaker  - 播放测试音频 (测试 DAC -> 功放 -> 喇叭 全链路)
+//   test_mic      - 录音 3 秒并报告电平 (测试 麦克风 -> ES8311 ADC -> I2S 全链路)
+//   test_tts      - 播放 Google TTS 语音 (测试 网络 -> TTS -> 喇叭 全链路)
+//   help          - 显示帮助信息
+static void handleSerialCommands() {
+  if (!Serial.available()) return;
+
+  String cmd = Serial.readStringUntil('\n');
+  cmd.trim();
+  cmd.toLowerCase();
+
+  if (cmd.length() == 0) return;
+
+  Serial.println("========================================");
+  Serial.printf("📩 收到串口命令: %s\n", cmd.c_str());
+  Serial.println("========================================");
+
+  if (cmd == "help" || cmd == "?") {
+    Serial.println("可用命令:");
+    Serial.println("  test_speaker - 播放测试音频 (测试喇叭硬件)");
+    Serial.println("  test_mic     - 录音 3 秒并报告电平 (测试麦克风硬件)");
+    Serial.println("  test_tts     - 播放 Google TTS 中文语音 (测试网络+TTS+喇叭)");
+    Serial.println("  test_tone    - 直接 I2S 1kHz 音调测试 (绕过 Audio 库, 验证硬件链路)");
+    Serial.println("  help         - 显示此帮助信息");
+    return;
+  }
+
+  if (!audio) {
+    Serial.println("❌ 音频 HAL 未初始化！");
+    return;
+  }
+
+  if (cmd == "test_speaker") {
+    // 检查状态机是否正在使用音频 (录音/处理/播放)
+    if (DeviceStateMachine::getInstance().getState() == STATE_RECORDING ||
+        DeviceStateMachine::getInstance().getState() == STATE_PROCESSING ||
+        DeviceStateMachine::getInstance().getState() == STATE_PLAYING_AUDIO) {
+      Serial.println("⚠️ [测试] 状态机正在使用音频硬件，请稍后再试！");
+      return;
+    }
+    serial_diag_active = true;
+    Serial.println("🔊 [测试] 开始喇叭测试...");
+    Serial.println("🔊 [测试] 播放 1kHz 测试音 (通过网络拉取)");
+    Serial.flush();
+
+    // 使用一个可靠的测试音频 URL (ESP32-audioI2S 库自带示例)
+    // 播放一段简短的 MP3 测试音
+    bool ok = audio->playAudioStream("https://www.soundjay.com/buttons/sounds/button-09.mp3");
+    if (ok) {
+      Serial.println("✅ [测试] 喇叭播放已启动！请听是否有声音。");
+      Serial.println("⚠️ [测试] 如果没有声音，检查:");
+      Serial.println("   1. AUDIO_EN_PIN (GPIO1) 是否为 LOW (功放使能)");
+      Serial.println("   2. I2S_DOUT_PIN (GPIO8) 连接是否正常");
+      Serial.println("   3. 喇叭线是否接在 JP3 端子上");
+      Serial.println("   4. FM8002E 功放芯片是否供电正常");
+    } else {
+      Serial.println("❌ [测试] 喇叭播放启动失败！可能是网络问题。");
+      Serial.println("💡 [测试] 尝试 test_tts 命令使用其他音频源。");
+    }
+    serial_diag_active = false;
+    return;
+  }
+
+  if (cmd == "test_mic") {
+    // 检查状态机是否正在使用音频 (录音/处理/播放)
+    DeviceState currentState = DeviceStateMachine::getInstance().getState();
+    if (currentState == STATE_RECORDING || currentState == STATE_PROCESSING || currentState == STATE_PLAYING_AUDIO) {
+      Serial.println("⚠️ [测试] 状态机正在使用音频硬件，请稍后再试！");
+      return;
+    }
+    // 如果正在播放，先停止
+    if (audio->isPlaying()) {
+      audio->stopAudio();
+      vTaskDelay(pdMS_TO_TICKS(200));
+    }
+
+    serial_diag_active = true; // 锁定 I2S，阻止状态机并发操作
+
+    Serial.println("🎙️ [测试] 开始麦克风测试...");
+    Serial.println("🎙️ [测试] 将录音 3 秒，请对着麦克风说话！");
+    Serial.println("🎙️ [测试] 引脚配置:");
+    Serial.printf("   - I2S_BCLK_PIN: GPIO%d\n", I2S_BCLK_PIN);
+    Serial.printf("   - I2S_LRC_PIN:  GPIO%d\n", I2S_LRC_PIN);
+    Serial.printf("   - I2S_DIN_PIN (麦克风数据输入): GPIO%d\n", I2S_DIN_PIN);
+    Serial.printf("   - ES8311 I2C 地址: 0x18 (SDA: GPIO%d, SCL: GPIO%d)\n", TOUCH_SDA_PIN, TOUCH_SCL_PIN);
+    Serial.flush();
+
+    // 开始录音
+    audio->startRecording();
+    Serial.println("🎙️ [测试] >>> 录音开始！请说话！ <<<");
+    Serial.flush();
+
+    // 录音 3 秒，每 500ms 报告电平
+    uint32_t startTime = millis();
+    while (millis() - startTime < 3000) {
+      audio->update(); // 驱动 I2S 读取
+      int vol = audio->getRecordVolumeDb();
+      // 用条形图显示电平
+      int bars = vol / 5;
+      String barStr = "";
+      for (int i = 0; i < 20; i++) {
+        barStr += (i < bars) ? "█" : "░";
+      }
+      Serial.printf("\r🎙️ 电平: [%s] %3d/100  ", barStr.c_str(), vol);
+      Serial.flush();
+      vTaskDelay(pdMS_TO_TICKS(100));
+    }
+
+    // 停止录音
+    uint8_t* buf = nullptr;
+    size_t sz = 0;
+    audio->stopRecording(buf, sz);
+
+    serial_diag_active = false; // 解锁 I2S
+
+    Serial.println("");
+    Serial.println("========================================");
+    Serial.println("🎙️ [测试] 麦克风测试完成！");
+    Serial.println("========================================");
+    Serial.println("📊 判读标准:");
+    Serial.println("   ✅ 电平 > 20: 麦克风正常工作");
+    Serial.println("   ⚠️ 电平 5-20: 信号微弱，可能麦克风被遮挡或增益太低");
+    Serial.println("   ❌ 电平 < 5:  麦克风无信号，检查:");
+    Serial.println("      1. ES8311 ADC 通路是否正确打开 (看启动日志)");
+    Serial.println("      2. I2S_DIN_PIN (GPIO6) 连接是否正常");
+    Serial.println("      3. MEMS 硅麦供电是否正常 (3.3V)");
+    Serial.println("      4. ES8311 寄存器 0x14 (MIC gain) 是否设置合理");
+    Serial.flush();
+    return;
+  }
+
+  if (cmd == "test_tts") {
+    // 检查状态机是否正在使用音频
+    if (DeviceStateMachine::getInstance().getState() == STATE_RECORDING ||
+        DeviceStateMachine::getInstance().getState() == STATE_PROCESSING ||
+        DeviceStateMachine::getInstance().getState() == STATE_PLAYING_AUDIO) {
+      Serial.println("⚠️ [测试] 状态机正在使用音频硬件，请稍后再试！");
+      return;
+    }
+    serial_diag_active = true;
+    Serial.println("🗣️ [测试] 开始 TTS 语音测试...");
+    Serial.println("🗣️ [测试] 使用服务器代理 Google TTS (免费, 无需 API Key)");
+    Serial.flush();
+
+    // 通过服务器代理访问 Google TTS (Google 在国内被墙, ESP32 直连失败)
+    // 服务器从 Google 拉取音频后流式转发给 ESP32
+    String ttsText = "你好，我是班级宠物园设备，喇叭和语音合成功能正常工作。";
+    String ttsUrl = String(deviceConfig.server_url) + "/pet-garden/api/device/tts-stream?text=" + urlEncode(ttsText);
+
+    Serial.printf("🗣️ [测试] TTS URL: %s\n", ttsUrl.c_str());
+    Serial.flush();
+
+    bool ok = audio->playAudioStream(ttsUrl);
+    if (ok) {
+      Serial.println("✅ [测试] TTS 播放已启动！请听是否有中文语音。");
+      Serial.println("⚠️ [测试] 如果没有声音或卡顿:");
+      Serial.println("   1. 检查 WiFi 是否连接正常");
+      Serial.println("   2. 检查服务器是否能访问 Google TTS");
+      Serial.println("   3. ESP32 SSL 内存可能不足，尝试重启设备");
+    } else {
+      Serial.println("❌ [测试] TTS 播放失败！可能是网络或 SSL 问题。");
+    }
+    serial_diag_active = false;
+    return;
+  }
+
+  if (cmd == "test_tone") {
+    serial_diag_active = true;
+    Serial.println("🔊 [测试] 开始直接 I2S 音调测试 (绕过 Audio 库)...");
+    Serial.println("🔊 [测试] 这将直接向 I2S 写入 1kHz 正弦波数据");
+    Serial.flush();
+
+    audio->playTestTone(1000, 3000);  // 1kHz, 3秒
+
+    serial_diag_active = false;
+    return;
+  }
+
+  Serial.printf("❓ 未知命令: %s (输入 help 查看可用命令)\n", cmd.c_str());
+}
+
+// URL 编码辅助函数
+static String urlEncode(const String& str) {
+  String encoded = "";
+  char c;
+  for (int i = 0; i < str.length(); i++) {
+    c = str.charAt(i);
+    if (isAlphaNumeric(c) || c == '-' || c == '_' || c == '.' || c == '~') {
+      encoded += c;
+    } else {
+      char buf[4];
+      sprintf(buf, "%%%02X", (uint8_t)c);
+      encoded += buf;
+    }
+  }
+  return encoded;
+}
+
 void loop() {
+  // 串口诊断命令处理 (非阻塞)
+  handleSerialCommands();
+
   // 驱动网络和音频流
   if (audio) {
     audio->update();

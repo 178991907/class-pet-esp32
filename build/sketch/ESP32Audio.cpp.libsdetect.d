@@ -269,9 +269,10 @@ ESP32Audio.o: \
  /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/libraries/SPIFFS/src/SPIFFS.h \
  /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/libraries/FFat/src/FFat.h \
  /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/tools/sdk/esp32s3/include/wear_levelling/include/wear_levelling.h \
- /Users/Terry/Downloads/class-pet-main/build/sketch/ES8311.h \
- /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/libraries/Wire/src/Wire.h \
- /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/cores/esp32/esp32-hal.h \
+ /Users/Terry/Downloads/class-pet-main/build/sketch/es8311.h \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/tools/sdk/esp32s3/include/driver/include/driver/i2c.h \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/tools/sdk/esp32s3/include/esp_ringbuf/include/freertos/ringbuf.h \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/tools/sdk/esp32s3/include/hal/include/hal/i2c_types.h \
  /Users/Terry/Downloads/class-pet-main/build/sketch/Board.h \
  /Users/Terry/Downloads/class-pet-main/build/sketch/LcdDisplay.h \
  /Users/Terry/Documents/Arduino/libraries/lvgl/src/lvgl.h \
@@ -820,4 +821,7 @@ ESP32Audio.o: \
  /Users/Terry/Documents/Arduino/libraries/TFT_eSPI/Extensions/Button.h \
  /Users/Terry/Documents/Arduino/libraries/TFT_eSPI/Extensions/Sprite.h \
  /Users/Terry/Downloads/class-pet-main/build/sketch/CST820Touch.h \
- /Users/Terry/Downloads/class-pet-main/build/sketch/ClassPetUI.h
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/libraries/Wire/src/Wire.h \
+ /Users/Terry/Library/Arduino15/packages/esp32/hardware/esp32/2.0.17/cores/esp32/esp32-hal.h \
+ /Users/Terry/Downloads/class-pet-main/build/sketch/ClassPetUI.h \
+ /Users/Terry/Downloads/class-pet-main/build/sketch/es8311_reg.h
