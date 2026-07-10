@@ -19,24 +19,19 @@ async function getTtsConfig() {
 
 /**
  * 组装出能让单片机直接拉取音频流的 URL
+ * 为避免 Vercel Serverless Stream 阻塞以及单片机处理 HTTPS 握手卡死，
+ * 这里我们直接返回经典的 HTTP 纯净链路 (网易有道 TTS)
  * @param {string} text 要合成的文本
- * @param {object} req Express 的 request 对象 (用于提取 host 和 protocol)
+ * @param {object} req Express 的 request 对象
  * @returns {string} 完整的拉流 URL
  */
 export function getTtsAudioUrl(text, req) {
   if (!text) return null
-
-  // 构造当前服务器的基础 URL
-  const host = req.get('host')
-  const protocol = req.protocol
+  
+  // 直接生成网易有道的 HTTP 纯净音频接口 (非 HTTPS)
+  // 这个接口响应极快，无需证书，对 ESP32-audioI2S 最友好
   const encodeText = encodeURIComponent(text)
-
-  // 兼容反向代理或 Vercel 的路径重写
-  if (req.originalUrl.includes('/pet-garden/api')) {
-    return `${protocol}://${host}/pet-garden/api/device/tts-stream?text=${encodeText}`
-  }
-
-  return `${protocol}://${host}/api/device/tts-stream?text=${encodeText}`
+  return `http://dict.youdao.com/dictvoice?audio=${encodeText}&le=zh`
 }
 
 /**
