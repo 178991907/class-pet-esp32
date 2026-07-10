@@ -19,19 +19,18 @@ async function getTtsConfig() {
 
 /**
  * 组装出能让单片机直接拉取音频流的 URL
- * 为避免 Vercel Serverless Stream 阻塞以及单片机处理 HTTPS 握手卡死，
- * 这里我们直接返回经典的 HTTP 纯净链路 (网易有道 TTS)
  * @param {string} text 要合成的文本
- * @param {object} req Express 的 request 对象
+ * @param {object} req Express 的 request 对象 (用于提取 host 和 protocol)
  * @returns {string} 完整的拉流 URL
  */
 export function getTtsAudioUrl(text, req) {
   if (!text) return null
-  
-  // 直接生成网易有道的 HTTP 纯净音频接口 (非 HTTPS)
-  // 这个接口响应极快，无需证书，对 ESP32-audioI2S 最友好
+
+  // 绕过所有后端代理，直接向设备返回纯 HTTP 直链
+  // 1. 避免 Vercel 强制 HTTPS 导致 ESP32 内存不足 (SSL handshake OOM)
+  // 2. 避免 Node pipe() 产生的 Transfer-Encoding: chunked 导致 ESP32 音频库卡死
   const encodeText = encodeURIComponent(text)
-  return `http://dict.youdao.com/dictvoice?audio=${encodeText}&le=zh`
+  return `http://tts.youdao.com/fanyivoice?word=${encodeText}&le=zh&keyfrom=speaker-target`
 }
 
 /**

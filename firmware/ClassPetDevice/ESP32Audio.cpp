@@ -107,10 +107,9 @@ void ESP32Audio::updateWavHeader() {
 void ESP32Audio::startRecording() {
   Serial.println("🔊 [音频] 准备进行 I2S 麦克风录音...");
 
-  // 如果正在播放，先停止，避免 I2S0 与 I2S1 时钟引脚冲突死锁
+  // 如果正在播放，先停止，避免 ES8311 的 DAC/ADC 数据冲突
   if (is_playing) {
     stopAudio();
-    delay(100); // 给点时间释放底层
   }
 
   // 重新配置 I2S_NUM_1 抢占共享的 BCLK/LRC
@@ -125,11 +124,6 @@ void ESP32Audio::startRecording() {
   if (SD_MMC.cardType() == CARD_NONE) {
     Serial.println("❌ 录音失败，SD 卡不可用！");
     return;
-  }
-
-  // 【致命修复】必须先删除旧文件，防止上一次非正常断电或死机造成的 FAT 链锁死导致系统挂起
-  if (SD_MMC.exists("/record.wav")) {
-    SD_MMC.remove("/record.wav");
   }
 
   record_file = SD_MMC.open("/record.wav", FILE_WRITE);
@@ -189,8 +183,7 @@ int ESP32Audio::getRecordVolumeDb() {
   // 计算最近采样的峰值 (绝对值最大)，转换为 0-100 dB 近似
   int16_t peak = 0;
   for (uint8_t i = 0; i < 64; i++) {
-    int16_t v = last_samples[i];
-    if (v < 0) v = -v; // 避免 abs 溢出问题
+    int16_t v = abs(last_samples[i]);
     if (v > peak) peak = v;
   }
   // 16-bit 采样最大 32767，转换为 dB 标度
@@ -217,7 +210,12 @@ bool ESP32Audio::playAudioStream(const String& url) {
 
   Serial.printf("🔊 [音频] 正在拉取并流式播放网络音频: %s\n", url.c_str());
   is_playing = true;
-  return audioStream.connecttohost(url.c_str());
+  bool ret = audioStream.connecttohost(url.c_str());
+  if (!ret) {
+    is_playing = false;
+    Serial.println("❌ [音频] 网络连接失败，停止播放。");
+  }
+  return ret;
 }
 
 void ESP32Audio::stopAudio() {

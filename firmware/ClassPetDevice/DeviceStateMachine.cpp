@@ -517,12 +517,9 @@ void DeviceStateMachine::loopState() {
       uint32_t recordStart = millis();
       bool is_btn_start = (digitalRead(PHYSICAL_KEY_PIN) == LOW);
       
-      // 等待按键释放，或者超时 (实体键最长 15 秒，触屏固定 10 秒)
-      uint32_t timeout = is_btn_start ? 15000 : 10000;
+      // 等待按键释放，或者超时 (实体键最长 10 秒，触屏固定 5 秒)，或者触摸屏收到停止事件
+      uint32_t timeout = is_btn_start ? 10000 : 5000;
       while (millis() - recordStart < timeout) {
-        // 关键死锁修复：在此循环内必须驱动底层音频库读取，否则 I2S DMA 溢出，且界面条不会动
-        audio->update();
-        
         LVGL_LOCK();
         ClassPetUI::getInstance().showRecordingScreen(audio->getRecordVolumeDb());
         LVGL_UNLOCK();
@@ -537,7 +534,7 @@ void DeviceStateMachine::loopState() {
             }
           }
         }
-        vTaskDelay(pdMS_TO_TICKS(20)); // 改为20ms增加响应速度
+        vTaskDelay(pdMS_TO_TICKS(100));
       }
       
       if (!is_btn_start) {
@@ -587,7 +584,15 @@ void DeviceStateMachine::loopState() {
       LVGL_LOCK();
       ClassPetUI::getInstance().showProcessingScreen("Playing voice response...");
       LVGL_UNLOCK();
+      
+      // 1. 如果播放自然结束，或者连接失败，退出状态
       if (!audio->isPlaying()) {
+        postEvent(EVENT_VOICE_PLAY_DONE);
+      }
+      // 2. 强力超时保护：如果超过 30 秒（防止网卡死或者大模型回复过长卡死）
+      else if (millis() - _state_start_time > 30000) {
+        Serial.println("⚠️ 播放音频超时或卡死，强制退出！");
+        audio->stopAudio();
         postEvent(EVENT_VOICE_PLAY_DONE);
       }
       break;
