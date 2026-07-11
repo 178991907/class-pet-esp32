@@ -18,7 +18,7 @@ set -e
 
 APP_DIR=~/class-pet-server
 REPO=https://github.com/178991907/class-pet-esp32.git
-PORT=3002
+PORT=3003
 
 echo "== 1. 拉取最新代码 =="
 if [ -d "$APP_DIR/.git" ]; then

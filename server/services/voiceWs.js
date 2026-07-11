@@ -191,7 +191,7 @@ async function handleConnection(ws, req) {
   }
 
   const isTls = (req.headers['x-forwarded-proto'] === 'https') || req.url.startsWith('/pet-garden')
-  const host = req.headers['host'] || `localhost:3002`
+  const host = req.headers['host'] || `localhost:3003`
   const baseUrl = `${isTls ? 'https' : 'http'}://${host}`
 
   let audioChunks = []
