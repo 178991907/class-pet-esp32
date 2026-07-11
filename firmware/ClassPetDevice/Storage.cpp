@@ -27,11 +27,22 @@ void Storage::init() {
   }
 
   DEBUG_PRINTLN("💾 正在初始化 SD 卡系统...");
-  // 使用 1-bit 模式 SDIO (避免占用 D1/D2/D3，留给 I2S 麦克风)
-  SD_MMC.setPins(38, 40, 39); // CLK=38, CMD=40, D0=39
+  // 使用官方 4-bit SDIO 引脚（Example_05_show_SD_jpg_picture）
+  // CLK=38, CMD=40, D0=39, D1=41, D2=48, D3=47
+  // 之前用 1-bit 模式只配 3 根引脚会导致 send_op_cond 0x107 初始化失败
+  bool sdOk = false;
+  for(int retry = 0; retry < 3 && !sdOk; retry++) {
+      if(retry > 0) {
+          DEBUG_PRINTF("💾 第 %d 次尝试初始化 SD 卡...\n", retry + 1);
+          delay(200);  // 两次尝试之间给 TF 卡一点稳定时间
+      }
+      SD_MMC.setPins(38, 40, 39, 41, 48, 47); // 4-bit SDIO
+      sdOk = SD_MMC.begin("/sdcard", false, false, 10000); // 4-bit 模式, 10MHz
+      if(sdOk) break;
+      SD_MMC.end();  // 清理失败状态, 下次 setPins 重新初始化
+  }
   
-  // 限制时钟频率为 10MHz (10000 kHz)，提高抗干扰能力，防读写卡死
-  if (!SD_MMC.begin("/sdcard", true, false, 10000)) {
+  if (!sdOk) {
     DEBUG_PRINTLN("⚠️ 未检测到 SD 卡，或挂载失败！");
   } else {
     uint8_t cardType = SD_MMC.cardType();

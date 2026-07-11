@@ -8,6 +8,7 @@
 #define AUDIO_HAL_H
 
 #include <Arduino.h>
+#include <functional>
 
 class AudioHAL {
 public:
@@ -51,6 +52,20 @@ public:
 
   // 10. 直接 I2S 音调测试（诊断用，绕过 Audio 库验证硬件链路）
   virtual void playTestTone(int frequency = 1000, int duration_ms = 2000) {}
+
+  // ================= 流式语音 (Route B: WebSocket 语音通道) =================
+  // 11. 设置 PCM 上行回调: 录音时每读到一个 I2S 数据块就调用它 (设备端通过 WS 上传)
+  virtual void setPcmUploadCallback(std::function<void(const uint8_t*, size_t)> cb) { (void)cb; }
+  // 12. 开启/关闭 PCM 上行
+  virtual void enableStreamUp(bool en) { (void)en; }
+  // 13. 启动 PCM 直推播放 (16k 单声道, 内部转立体声写到 I2S TX)
+  virtual bool startPcmPlayback() { return false; }
+  // 14. 喂入一帧 TTS PCM 音频 (来自 WS 下行), 立即写到 I2S
+  virtual void feedPcm(const uint8_t* data, size_t len) { (void)data; (void)len; }
+  // 15. 停止 PCM 播放, 恢复播放驱动
+  virtual void stopPcmPlayback() {}
+  // 16. 是否正在 PCM 播放
+  virtual bool isPcmPlaying() { return false; }
 };
 
 /* 

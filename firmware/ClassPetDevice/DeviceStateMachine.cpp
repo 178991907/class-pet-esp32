@@ -13,6 +13,7 @@
 #include "Storage.h"
 #include "AudioHAL.h"
 #include "TomatoTimer.h"
+#include "WebSocketAudio.h"
 #include <WiFi.h>
 #include <ArduinoJson.h>
 
@@ -128,6 +129,12 @@ void DeviceStateMachine::init() {
   } else {
     Serial.println("✅ [状态机] 创建 FreeRTOS 状态机任务成功！");
   }
+
+  // ===== 配置流式语音 WebSocket 回调 (Route B) =====
+  audio->setPcmUploadCallback([this](const uint8_t* d, size_t l) { this->uploadVoiceFrame(d, l); });
+  voiceWs.onBinary([this](const uint8_t* d, size_t l) { audio->feedPcm(d, l); });
+  voiceWs.onText([this](const String& t) { this->handleWsText(t); });
+  voiceWs.onClose([this]() { Serial.println("🔌 [WS] 语音流已断开"); _wsClosed = true; _voiceWsOk = false; });
 }
 
 void DeviceStateMachine::postEvent(DeviceEvent ev) {
@@ -301,7 +308,13 @@ void DeviceStateMachine::loopState() {
           proxy = "ProxyIP.CMLiussss.net"; // 默认使用优选代理域名
         }
         ApiClient::init(deviceConfig.server_url, deviceConfig.device_secret, proxy);
-        
+
+        // 中文字库已编译进固件 (cjk16_bin.c), 在 ClassPetUI::init() 时已通过
+        // lv_binfont_create_from_buffer 从内置缓冲区加载, 无需再从服务器下载。
+        // 因此这里不再调用 ApiClient::downloadCjkFont(), 避免无谓的 450KB 下载
+        // 以及之前出现的下载污染导致中文显示为方块的问题。
+        // (保留 ApiClient::downloadCjkFont() 函数以便将来如需恢复 TF 卡方案。)
+
         LVGL_LOCK();
         ClassPetUI::getInstance().showProcessingScreen("WiFi Connected. Syncing...");
         LVGL_UNLOCK();
@@ -527,17 +540,49 @@ void DeviceStateMachine::loopState() {
     }
     
     case STATE_RECORDING: {
-      audio->startRecording();
+      // ---- 进入录音: 建立语音 WS 长连接并开录 (仅首次进入执行一次) ----
+      if (!_recEntryDone) {
+        _recEntryDone = true;
+        _routeB = false;
+        _voiceWsOk = false;
+        _wsClosed = false;
+        _tts_started = false;
+        _tts_done = false;
+        _pcmMode = false;
+        _aborted = false;
+        _ttsDoneTime = 0;
+        _sttText = "";
+        _lastReplyText = "";
+        _ttsFallbackUrl = "";
+
+        audio->startRecording();
+
+        // 解析 server_url 并直连语音 WS (/ws/voice)
+        String host; uint16_t port; bool tls;
+        parseServerUrl(deviceConfig.server_url, host, port, tls);
+        if (WiFi.status() == WL_CONNECTED && host.length() > 0) {
+          _voiceWsOk = voiceWs.begin(host.c_str(), port, "/ws/voice", tls,
+                                     Network::getMacAddress().c_str());
+        }
+        if (_voiceWsOk) {
+          _routeB = true;
+          audio->enableStreamUp(true);  // 录音即分帧上行
+          Serial.println("🚀 [WS] 语音流通道已建立, 开始上行 PCM");
+        } else {
+          Serial.println("⚠️ [WS] 连接失败, 本次退回原 HTTP 流程");
+        }
+      }
+
       uint32_t recordStart = millis();
       bool is_btn_start = (digitalRead(PHYSICAL_KEY_PIN) == LOW);
-      
+
       // 等待按键释放，或者超时 (实体键最长 10 秒，触屏固定 5 秒)，或者触摸屏收到停止事件
       uint32_t timeout = is_btn_start ? 10000 : 5000;
       while (millis() - recordStart < timeout) {
         LVGL_LOCK();
         ClassPetUI::getInstance().showRecordingScreen(audio->getRecordVolumeDb());
         LVGL_UNLOCK();
-        
+
         if (is_btn_start) {
           if (digitalRead(PHYSICAL_KEY_PIN) == HIGH) break;
         } else {
@@ -550,64 +595,147 @@ void DeviceStateMachine::loopState() {
         }
         vTaskDelay(pdMS_TO_TICKS(100));
       }
-      
+
       if (!is_btn_start) {
          DeviceEvent ev;
          // 消费掉队列中的停止事件
          if (xQueuePeek(_queue, &ev, 0) == pdTRUE && ev == EVENT_VOICE_RECORD_DONE) {
-             xQueueReceive(_queue, &ev, 0); 
+             xQueueReceive(_queue, &ev, 0);
          }
       }
-      
+
+      // ---- 录音结束: 关闭上行, 发 end (仅 Route B), 释放 RX 驱动 ----
+      audio->enableStreamUp(false);
+      uint8_t* wavBuf = nullptr; size_t wavSize = 0;
+      audio->stopRecording(wavBuf, wavSize);
+      if (_routeB && _voiceWsOk) {
+        voiceWs.sendText("{\"type\":\"end\"}");
+        Serial.println("📤 [WS] 已发送 end, 等待服务端 ASR/LLM/TTS");
+      }
+      _recEntryDone = false;
       postEvent(EVENT_VOICE_RECORD_DONE);
       break;
     }
-    
+
     case STATE_PROCESSING: {
       LVGL_LOCK();
       ClassPetUI::getInstance().showProcessingScreen("识别中...");
       LVGL_UNLOCK();
-      
-      uint8_t* wavBuf = nullptr;
-      size_t wavSize = 0;
-      audio->stopRecording(wavBuf, wavSize);
-      
-      VoiceActionResponse res;
-      ApiClient::postVoiceAudio("/record.wav", res);
-      
-      if (res.success) {
-        LVGL_LOCK();
-        ClassPetUI::getInstance().showToast(res.reply_text, 4000);
-        LVGL_UNLOCK();
-        if (res.audio_url.length() > 0) {
-          audio->playAudioStream(res.audio_url);
-          _state = STATE_PLAYING_AUDIO;
+
+      // ---- Route A (原 HTTP 流程): 整段 WAV 上传 ----
+      if (!_routeB) {
+        VoiceActionResponse res;
+        ApiClient::postVoiceAudio("/record.wav", res);
+        if (res.success) {
+          LVGL_LOCK();
+          ClassPetUI::getInstance().showToast(res.reply_text, 4000);
+          LVGL_UNLOCK();
+          if (res.audio_url.length() > 0) {
+            audio->playAudioStream(res.audio_url);
+            _state = STATE_PLAYING_AUDIO;
+          } else {
+            _state = STATE_NORMAL_ONLINE;
+          }
         } else {
+          LVGL_LOCK();
+          ClassPetUI::getInstance().showToast(res.error_msg.c_str(), 3000);
+          LVGL_UNLOCK();
           _state = STATE_NORMAL_ONLINE;
         }
-      } else {
-        LVGL_LOCK();
-        ClassPetUI::getInstance().showToast(res.error_msg.c_str(), 3000);
-        LVGL_UNLOCK();
+        break;
+      }
+
+      // ---- Route B (流式): 等待 WS 下发的 stt/llm/tts ----
+      // tts start 已在 handleWsText 中触发 startPcmPlayback 并置 _tts_started
+      if (_tts_started) {
+        if (_ttsFallbackUrl.length() > 0) {
+          audio->playAudioStream(_ttsFallbackUrl); // MP3 降级拉流
+          _pcmMode = false;
+        } else {
+          _pcmMode = true; // PCM 直推已在播
+        }
+        _state = STATE_PLAYING_AUDIO;
+        break;
+      }
+
+      // 服务端已关闭连接且未下发任何音频 (仅 llm 文本, 如未绑定/限频/识别失败)
+      if (!voiceWs.connected()) {
+        if (_lastReplyText.length() > 0) {
+          LVGL_LOCK();
+          ClassPetUI::getInstance().showToast(_lastReplyText, 4000);
+          LVGL_UNLOCK();
+        }
+        voiceWs.close();
+        _state = STATE_NORMAL_ONLINE;
+        break;
+      }
+
+      // 超时保护: 20 秒未收到任何音频则退出
+      if (millis() - _state_start_time > 20000) {
+        Serial.println("⚠️ [WS] 处理超时, 强制退出");
+        voiceWs.close();
         _state = STATE_NORMAL_ONLINE;
       }
       break;
     }
-    
+
     case STATE_PLAYING_AUDIO: {
       LVGL_LOCK();
-      ClassPetUI::getInstance().showProcessingScreen("Playing voice response...");
+      ClassPetUI::getInstance().showProcessingScreen("播放中...");
       LVGL_UNLOCK();
-      
-      // 1. 如果播放自然结束，或者连接失败，退出状态
-      if (!audio->isPlaying()) {
-        postEvent(EVENT_VOICE_PLAY_DONE);
-      }
-      // 2. 强力超时保护：如果超过 30 秒（防止网卡死或者大模型回复过长卡死）
-      else if (millis() - _state_start_time > 30000) {
-        Serial.println("⚠️ 播放音频超时或卡死，强制退出！");
-        audio->stopAudio();
-        postEvent(EVENT_VOICE_PLAY_DONE);
+
+      if (_pcmMode) {
+        // ---- PCM 流式播放: feedPcm 由 WS poll() 在 loop 中驱动 ----
+        // 用户打断: 播放 0.5s 后按实体键即发 abort 并停止
+        if (!_aborted && digitalRead(PHYSICAL_KEY_PIN) == LOW &&
+            (millis() - _state_start_time > 500)) {
+          _aborted = true;
+          voiceWs.sendText("{\"type\":\"abort\"}");
+          audio->stopPcmPlayback();
+          voiceWs.close();
+          Serial.println("🛑 [WS] 用户打断, 已 abort");
+          _state = STATE_NORMAL_ONLINE;
+          break;
+        }
+
+        // TTS 下发结束且 (缓冲放完 或 服务端已关) -> 收尾
+        if (_tts_done) {
+          // feedPcm 受 I2S DMA 背压, 播放约为实时, 留 800ms 余量等 DMA 排空
+          if (millis() - _ttsDoneTime > 800 || !voiceWs.connected()) {
+            audio->stopPcmPlayback();
+            voiceWs.close();
+            if (_lastReplyText.length() > 0) {
+              LVGL_LOCK();
+              ClassPetUI::getInstance().showToast(_lastReplyText, 3000);
+              LVGL_UNLOCK();
+            }
+            Serial.println("✅ [WS] PCM 播放完成, 回到待机");
+            _state = STATE_NORMAL_ONLINE;
+            break;
+          }
+        } else if (millis() - _state_start_time > 30000) {
+          // 收到 tts start 但迟迟没有 stop (异常), 超时强退
+          Serial.println("⚠️ [WS] PCM 播放超时, 强制退出");
+          audio->stopPcmPlayback();
+          voiceWs.close();
+          _state = STATE_NORMAL_ONLINE;
+        }
+      } else {
+        // ---- MP3 降级拉流播放 ----
+        // playAudioStream 为异步连接, 刚调用时 isPlaying() 可能为 false, 故加 1.5s 时间门槛
+        if (!audio->isPlaying() && millis() - _state_start_time > 1500) {
+          if (_lastReplyText.length() > 0) {
+            LVGL_LOCK();
+            ClassPetUI::getInstance().showToast(_lastReplyText, 3000);
+            LVGL_UNLOCK();
+          }
+          voiceWs.close();
+          _state = STATE_NORMAL_ONLINE;
+        } else if (millis() - _state_start_time > 30000) {
+          audio->stopAudio();
+          voiceWs.close();
+          _state = STATE_NORMAL_ONLINE;
+        }
       }
       break;
     }
@@ -618,6 +746,95 @@ void DeviceStateMachine::loopState() {
 }
 
 #include <SD_MMC.h>
+
+// ==========================================
+// 流式语音辅助方法 (Route B)
+// ==========================================
+
+// 解析配置中的 server_url -> host / port / tls
+// 兼容 https://host, https://host:port, http://host:port, 以及带路径后缀
+void DeviceStateMachine::parseServerUrl(const String& url, String& host, uint16_t& port, bool& useTls) {
+  host = "";
+  port = 0;
+  useTls = false;
+
+  String s = url;
+  int idx = s.indexOf("://");
+  if (idx >= 0) {
+    String scheme = s.substring(0, idx);
+    useTls = (scheme == "https" || scheme == "wss");
+    s = s.substring(idx + 3);
+  }
+  // 去掉路径部分, 只保留 host[:port]
+  int slash = s.indexOf('/');
+  if (slash >= 0) s = s.substring(0, slash);
+  // 拆分 host 与 port
+  int colon = s.indexOf(':');
+  if (colon >= 0) {
+    host = s.substring(0, colon);
+    port = (uint16_t)s.substring(colon + 1).toInt();
+  } else {
+    host = s;
+  }
+  if (port == 0) port = useTls ? 443 : 80;
+  Serial.printf("🔌 [WS] 解析服务器地址: %s -> host=%s port=%u tls=%d\n",
+    url.c_str(), host.c_str(), port, useTls);
+}
+
+// 把录音读到的 I2S PCM 块上行到 WS (由 AudioHAL 的 upload 回调触发)
+void DeviceStateMachine::uploadVoiceFrame(const uint8_t* d, size_t l) {
+  if (_voiceWsOk && voiceWs.connected()) {
+    voiceWs.sendBinary(d, l);
+  }
+}
+
+// 解析服务端下发的文本控制消息 (stt/llm/tts)
+void DeviceStateMachine::handleWsText(const String& text) {
+  DynamicJsonDocument doc(512);
+  DeserializationError err = deserializeJson(doc, text);
+  if (err) {
+    Serial.println("⚠️ [WS] 控制消息 JSON 解析失败");
+    return;
+  }
+  const char* type = doc["type"] | "";
+
+  if (strcmp(type, "hello") == 0) {
+    Serial.println("🤝 [WS] 收到 hello, 语音会话已建立");
+  } else if (strcmp(type, "stt") == 0) {
+    const char* t = doc["text"] | "";
+    _sttText = t;
+    Serial.printf("📝 [WS] ASR 识别: %s\n", t);
+    LVGL_LOCK();
+    ClassPetUI::getInstance().showToast(String("你说: ") + t, 3000);
+    LVGL_UNLOCK();
+  } else if (strcmp(type, "llm") == 0) {
+    const char* t = doc["text"] | "";
+    _lastReplyText = t;
+    Serial.printf("💬 [WS] 大模型回复: %s\n", t);
+  } else if (strcmp(type, "tts") == 0) {
+    if (doc.containsKey("state")) {
+      const char* st = doc["state"] | "";
+      if (strcmp(st, "start") == 0) {
+        _tts_started = true;
+        _pcmMode = true;
+        // 立即安装 16k TX 驱动, 准备接收下行的 TTS PCM
+        // (先于状态机切入 PLAYING_AUDIO, 避免首帧 PCM 被丢弃)
+        audio->startPcmPlayback();
+        Serial.println("🔊 [WS] TTS start, 开始 PCM 直推播放");
+      } else if (strcmp(st, "stop") == 0) {
+        _tts_done = true;
+        _ttsDoneTime = millis();
+        Serial.println("🔊 [WS] TTS stop, PCM 下发结束");
+      }
+    } else if (doc.containsKey("url")) {
+      // 服务端 PCM 解码失败, 降级为 MP3 直链, 由 Audio 库拉流播放
+      _ttsFallbackUrl = String((const char*)doc["url"]);
+      _tts_started = true;
+      _tts_done = true;
+      Serial.printf("🔊 [WS] TTS 降级为 MP3: %s\n", _ttsFallbackUrl.c_str());
+    }
+  }
+}
 
 void DeviceStateMachine::loadPetGif(const String& petType, int petLevel) {
   DEBUG_PRINTF("🎨 [GIF] loadPetGif 被调用: petType='%s', petLevel=%d, 已缓存='%s', buf=%s\n",

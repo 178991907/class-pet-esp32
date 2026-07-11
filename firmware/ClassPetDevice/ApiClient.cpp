@@ -490,6 +490,83 @@ bool ApiClient::downloadAsset(const String& petType, int petLevel) {
     return false;
   }
 }
+bool ApiClient::downloadCjkFont() {
+  const char* fontPath = "/cjk16.bin";
+
+  // 已存在则跳过 (下次启动会直接加载)
+  if (SD_MMC.exists(fontPath)) {
+    DEBUG_PRINTLN("🌐 [字体] TF 卡已存在 cjk16.bin，跳过下载");
+    return true;
+  }
+  if (WiFi.status() != WL_CONNECTED) {
+    DEBUG_PRINTLN("🌐 [字体] 网络未连接，暂缓下载字库");
+    return false;
+  }
+  if (server_url.isEmpty()) {
+    DEBUG_PRINTLN("🌐 [字体] 服务器地址未配置，暂缓下载字库");
+    return false;
+  }
+
+  // 使用与 TTS/状态接口相同的路径拼接方式 (server_url + /pet-garden/api + endpoint)
+  String targetUrl = server_url + api_prefix + "/device/font/cjk16.bin";
+  DEBUG_PRINTF("🌐 [字体] 首次启动从服务器下载中文字库: %s\n", targetUrl.c_str());
+
+  HTTPClient http;
+  http.setReuse(false);
+  http.setTimeout(20000);  // 给 TLS 握手和 440KB 传输留足时间
+
+  #if defined(ESP8266)
+    WiFiClient client;
+    http.begin(client, targetUrl);
+  #else
+    if (targetUrl.startsWith("https")) {
+      http.begin(secureClient, targetUrl);
+    } else {
+      http.begin(plainClient, targetUrl);
+    }
+  #endif
+
+  int httpCode = http.GET();
+  if (httpCode == HTTP_CODE_OK) {
+    int size = http.getSize();
+    WiFiClient* stream = http.getStreamPtr();
+
+    fs::File f = SD_MMC.open(fontPath, "w");
+    if (!f) {
+      DEBUG_PRINTLN("❌ [字体] 无法在 TF 卡创建 cjk16.bin");
+      http.end();
+      return false;
+    }
+
+    uint8_t buff[512];
+    int written = 0;
+    while (http.connected() && (size > 0 || size == -1)) {
+      int toRead = (size > 0 && size < (int)sizeof(buff)) ? size : (int)sizeof(buff);
+      int c = stream->readBytes(buff, toRead);
+      if (c > 0) {
+        f.write(buff, c);
+        written += c;
+        if (size > 0) size -= c;
+      } else {
+        break;
+      }
+    }
+    f.close();
+    http.end();
+
+    if (written > 0) {
+      DEBUG_PRINTF("✅ [字体] 已从服务器下载并保存到 TF 卡 (%d 字节)\n", written);
+      return true;
+    }
+    DEBUG_PRINTLN("❌ [字体] 下载内容为空");
+    return false;
+  } else {
+    DEBUG_PRINTF("❌ [字体] 下载失败，HTTP 状态码: %d\n", httpCode);
+    http.end();
+    return false;
+  }
+}
+
 void ApiClient::postVoiceAudio(const String& filePath, VoiceActionResponse& res) {
   res.success = false;
   res.action = "none";

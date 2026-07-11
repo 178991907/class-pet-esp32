@@ -244,6 +244,7 @@ void ESP32Audio::startRecording() {
   };
   // 录音引脚：DIN=6（麦克风数据输入），DOUT 不用
   i2s_pin_config_t rx_pin_config = {
+    .mck_io_num = I2S_MCLK_PIN,
     .bck_io_num = I2S_BCLK_PIN,
     .ws_io_num = I2S_LRC_PIN,
     .data_out_num = I2S_PIN_NO_CHANGE,
@@ -421,6 +422,11 @@ void ESP32Audio::update() {
       record_file.write(i2s_read_buff, bytes_read);
       record_data_size += bytes_read;
 
+      // 流式上行: 把录到的 PCM 块通过回调交给 WS 客户端 (Route B)
+      if (_streamUpEnabled && _pcmUploadCb) {
+        _pcmUploadCb(i2s_read_buff, bytes_read);
+      }
+
       int16_t* samples = (int16_t*)i2s_read_buff;
       size_t num_samples = bytes_read / sizeof(int16_t);
       int16_t chunk_peak = 0;
@@ -515,4 +521,90 @@ void ESP32Audio::playTestTone(int frequency, int duration_ms) {
   Serial.println("   2. ES8311 寄存器配置不正确（看上方寄存器转储）");
   Serial.println("   3. FM8002E 功放未使能或损坏");
   Serial.println("   4. 喇叭接线问题");
+}
+
+// ================= 流式语音 PCM 播放 (Route B) =================
+// 16kHz 单声道 PCM -> 立体声 I2S TX, 边收边播
+
+bool ESP32Audio::startPcmPlayback() {
+  if (_pcm_playing) return true;
+
+  // 1. ES8311 切到 16kHz 播放模式
+  if (s_es8311_inited && s_es8311_handle) {
+    es8311_sample_frequency_config(s_es8311_handle, 16000 * 256, 16000);
+    es8311_voice_volume_set(s_es8311_handle, 85, NULL);
+  }
+  // 确保功放使能
+  digitalWrite(AUDIO_EN_PIN, LOW);
+
+  // 2. 卸载可能已安装的 Audio 库 TX 驱动, 再装我们自己的 16k TX 驱动
+  audioStream.stopSong();
+  i2s_driver_uninstall(I2S_NUM_0);
+  vTaskDelay(pdMS_TO_TICKS(50));
+
+  i2s_config_t tx_cfg = {
+    .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
+    .sample_rate = 16000,
+    .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
+    .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
+    .communication_format = I2S_COMM_FORMAT_STAND_I2S,
+    .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
+    .dma_buf_count = 8,
+    .dma_buf_len = 1024,
+    .use_apll = false,
+    .tx_desc_auto_clear = true,
+    .fixed_mclk = 0
+  };
+  i2s_pin_config_t tx_pin = {
+    .mck_io_num = I2S_MCLK_PIN,
+    .bck_io_num = I2S_BCLK_PIN,
+    .ws_io_num = I2S_LRC_PIN,
+    .data_out_num = I2S_DOUT_PIN,
+    .data_in_num = I2S_PIN_NO_CHANGE
+  };
+
+  esp_err_t e = i2s_driver_install(I2S_NUM_0, &tx_cfg, 0, NULL);
+  if (e != ESP_OK) {
+    Serial.printf("❌ [PCM] TX 驱动安装失败: %s\n", esp_err_to_name(e));
+    restorePlaybackI2S();
+    return false;
+  }
+  i2s_set_pin(I2S_NUM_0, &tx_pin);
+  _pcm_playing = true;
+  is_playing = false; // 与 audioStream 的 is_playing 区分
+  Serial.println("🔊 [PCM] 播放驱动就绪 (16k stereo), 等待下行音频...");
+  return true;
+}
+
+void ESP32Audio::feedPcm(const uint8_t* data, size_t len) {
+  if (!_pcm_playing) return;
+  if (len < 2) return;
+  size_t mono_samples = len / 2;
+  if (mono_samples > 512) mono_samples = 512; // 静态缓冲上限
+
+  // 单声道 -> 立体声 (L=R), 写到 I2S TX (ES8311 期望立体声 I2S)
+  static int16_t stereo_buf[1024];
+  const int16_t* mono = (const int16_t*)data;
+  for (size_t i = 0; i < mono_samples; i++) {
+    stereo_buf[i * 2] = mono[i];
+    stereo_buf[i * 2 + 1] = mono[i];
+  }
+  size_t to_write = mono_samples * 2 * sizeof(int16_t);
+  size_t written = 0;
+  i2s_write(I2S_NUM_0, stereo_buf, to_write, &written, pdMS_TO_TICKS(50));
+}
+
+void ESP32Audio::stopPcmPlayback() {
+  if (!_pcm_playing) return;
+  _pcm_playing = false;
+  i2s_driver_uninstall(I2S_NUM_0);
+  vTaskDelay(pdMS_TO_TICKS(50));
+  restorePlaybackI2S(); // 恢复 Audio 库的引脚配置 (下次 MP3 播放 connecttohost 会重装驱动)
+
+  // ES8311 恢复 44.1k 播放模式
+  if (s_es8311_inited && s_es8311_handle) {
+    es8311_sample_frequency_config(s_es8311_handle, 44100 * 256, 44100);
+    es8311_voice_volume_set(s_es8311_handle, 85, NULL);
+  }
+  Serial.println("🔊 [PCM] 播放停止, 已恢复播放模式");
 }

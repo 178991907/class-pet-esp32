@@ -76,6 +76,9 @@ public:
   // 4. 下载资产 (如宠物 GIF) 到本地 LittleFS  // 素材同步功能
   static bool downloadAsset(const String& petType, int petLevel);
 
+  // 4b. 下载中文字库 cjk16.bin 到 TF 卡 (首次启动自动从服务器拉取，无需手动拷贝)
+  static bool downloadCjkFont();
+
   // 5. 上报电量与充电状态心跳
   static bool sendHeartbeat(int batteryLevel, bool isCharging);
 

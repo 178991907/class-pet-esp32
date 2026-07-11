@@ -43,6 +43,19 @@ public:
   void update() override;
   // 直接 I2S 音调测试（绕过 Audio 库，直接写 I2S 数据验证硬件链路）
   void playTestTone(int frequency = 1000, int duration_ms = 2000);
+
+  // ===== 流式语音 (Route B) =====
+  void setPcmUploadCallback(std::function<void(const uint8_t*, size_t)> cb) override { _pcmUploadCb = cb; }
+  void enableStreamUp(bool en) override { _streamUpEnabled = en; }
+  bool startPcmPlayback() override;
+  void feedPcm(const uint8_t* data, size_t len) override;
+  void stopPcmPlayback() override;
+  bool isPcmPlaying() override { return _pcm_playing; }
+
+private:
+  bool _pcm_playing = false;
+  bool _streamUpEnabled = false;
+  std::function<void(const uint8_t*, size_t)> _pcmUploadCb = nullptr;
 };
 
 #endif // ESP32_AUDIO_H

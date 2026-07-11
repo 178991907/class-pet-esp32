@@ -391,6 +391,8 @@ void loop() {
   if (audio) {
     audio->update();
   }
+  // 轮询语音 WebSocket: 接收服务端下发的 TTS PCM 与 stt/llm/tts 控制消息
+  DeviceStateMachine::getInstance().pollVoiceWs();
   vTaskDelay(pdMS_TO_TICKS(5)); // 5ms 阻塞轮询，避免看门狗超时
 }
 

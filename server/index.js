@@ -1,5 +1,6 @@
 import express from 'express'
 import cors from 'cors'
+import { createServer } from 'http'
 import { v4 as uuidv4 } from 'uuid'
 
 import { initDb, getAsync, allAsync, runAsync, closeDb } from './db.js'
@@ -14,6 +15,7 @@ import ruleRoutes from './routes/rules.js'
 import backupRoutes from './routes/backup.js'
 import settingsRoutes from './routes/settings.js'
 import deviceRoutes from './routes/device.js'
+import { attachVoiceWs } from './services/voiceWs.js'
 
 const app = express()
 const PORT = 3002
@@ -283,7 +285,10 @@ const isVercel = process.env.VERCEL === '1' || !!process.env.NOW_REGION
 
 if (!isVercel) {
   // 启动服务器
-  const server = app.listen(PORT, () => {
+  const server = createServer(app)
+  // 挂载流式语音 WebSocket 端点 (/ws/voice)
+  attachVoiceWs(server)
+  server.listen(PORT, () => {
     console.log(`🚀 Server running on http://localhost:${PORT}`)
     console.log(`📅 ${new Date().toLocaleString()}`)
   })

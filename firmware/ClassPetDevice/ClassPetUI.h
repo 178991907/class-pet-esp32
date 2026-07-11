@@ -17,7 +17,8 @@ public:
   }
 
   void init();
-  
+  void reloadCjkFont();  // 字库下载完成后刷新所有中文标签
+
   // UI 触发接口
   void showNormalScreen(const String& name, int points, int level, int progress, int required, bool isMaxLevel, bool isOnline);
   void updateClock(const String& timeStr, const String& dateStr);
