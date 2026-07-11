@@ -840,7 +840,7 @@ void ClassPetUI::enterVoiceOverlay(const String& title) {
   _voice_overlay = lv_obj_create(parent);
   lv_obj_set_size(_voice_overlay, 240, 320);
   lv_obj_set_pos(_voice_overlay, 0, 0);
-  lv_obj_set_style_bg_opa(_voice_overlay, LV_OPA_TRANSPRANT, 0); // 透明, 露出底层宠物
+  lv_obj_set_style_bg_opa(_voice_overlay, LV_OPA_TRANSP, 0); // 透明, 露出底层宠物
   lv_obj_set_style_border_width(_voice_overlay, 0, 0);
   lv_obj_set_style_pad_all(_voice_overlay, 0, 0);
   lv_obj_clear_flag(_voice_overlay, LV_OBJ_FLAG_SCROLLABLE);
@@ -879,7 +879,7 @@ void ClassPetUI::enterVoiceOverlay(const String& title) {
   lv_obj_set_style_text_font(_voice_you, cjkFont(), 0);
   lv_label_set_long_mode(_voice_you, LV_LABEL_LONG_WRAP);
   lv_obj_set_style_bg_color(_voice_you, lv_color_white(), 0);
-  lv_obj_set_style_bg_opa(_voice_you, LV_OPA_85, 0);
+  lv_obj_set_style_bg_opa(_voice_you, LV_OPA_80, 0);
   lv_obj_set_style_radius(_voice_you, 8, 0);
   lv_obj_set_style_pad_all(_voice_you, 6, 0);
   lv_label_set_text(_voice_you, "");
