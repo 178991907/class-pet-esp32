@@ -341,6 +341,27 @@ export async function localApiAdapter(config: AxiosRequestConfig): Promise<Axios
       return createMockResponse(config, 200, { success: true, message: '已拒绝' })
     }
 
+    // === CHAT ROUTING (Web 语音伙伴 /chat) ===
+    if (urlWithoutParams === 'chat' && method === 'post') {
+      const msg = (body?.message || '').trim()
+      const name = body?.studentName || '小朋友'
+      let reply: string
+      if (/你好|您好|hi|hello|在吗/i.test(msg)) {
+        reply = `你好呀${name}！我是你的宠物小搭档，今天过得开心吗？😊`
+      } else if (/谢谢|感谢|多谢/i.test(msg)) {
+        reply = `不客气${name}～能陪你聊天我超开心的！🐾`
+      } else if (/作业|学习|考试|背书|默写/i.test(msg)) {
+        reply = `学习辛苦啦${name}！认真完成任务的话，宠物会悄悄涨成长值的，加油加油！📚✨`
+      } else if (/\?|？|吗|怎么|为什么|什么/i.test(msg)) {
+        reply = `这个问题真有意思${name}！让我想想……我觉得你可以先试试看，遇到难题随时来找我呀～🤔`
+      } else if (msg.length === 0) {
+        reply = `嗯？我好像没听清${name}，再跟我说说好不好～👂`
+      } else {
+        reply = `我听到啦${name}：「${msg.slice(0, 30)}」～你说得真棒，我记在心里啦！要不要给宠物加点成长值？🌟`
+      }
+      return createMockResponse(config, 200, { success: true, reply })
+    }
+
     // 默认回包
     return createMockResponse(config, 404, { error: `未匹配到模拟路由: ${method} ${path}` })
   } catch (error: any) {

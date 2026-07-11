@@ -18,11 +18,12 @@ import { WebSocketServer } from 'ws'
 import fetch from 'node-fetch'
 import { v4 as uuidv4 } from 'uuid'
 
-import { getAsync, runAsync } from '../db.js'
+import { getAsync, runAsync, allAsync } from '../db.js'
 import { autoConfirmLazyLoad } from '../services/taskService.js'
 import { getSetting } from '../utils/settings.js'
 import { recognizeSpeech, isAsrConfigError } from '../services/asrService.js'
 import { classifyIntent } from '../services/nlpService.js'
+import { publishEvent } from '../services/eventBus.js'
 
 const SAMPLE_RATE = 16000
 const CHUNK = 640 // 20ms @ 16k mono (16k * 2byte * 0.02 = 640)
@@ -128,6 +129,25 @@ async function fetchTtsMp3(text) {
 }
 
 // ================= 意图落库 (复制自 routes/device.js, 保持一致行为) =================
+
+// P2: 读取学生近期对话, 拼接成"记忆"上下文, 让宠物有连续对话的陪伴感
+async function getRecentHistory(studentId, limit = 6) {
+  try {
+    const rows = await allAsync(
+      `SELECT user_message, ai_response FROM chat_logs WHERE student_id = ? ORDER BY timestamp DESC LIMIT ?`,
+      studentId, limit
+    )
+    if (!rows || !rows.length) return ''
+    // 倒序后按时间正序拼接, 便于模型理解先后
+    const lines = rows
+      .reverse()
+      .map((r) => `用户: ${r.user_message || ''}\n宠物: ${r.ai_response || ''}`)
+    return lines.join('\n')
+  } catch (e) {
+    console.warn('⚠️ [WS] 读取历史记忆失败:', e.message)
+    return ''
+  }
+}
 
 async function applyIntent(student, nlpResult, now) {
   const responseData = {
@@ -296,13 +316,40 @@ async function handleEnd(ws, deviceId, audioChunks, audioBytes, baseUrl, isAbort
   ws.send(JSON.stringify({ type: 'stt', text }))
   console.log(`📝 [WS] ASR 文本: ${text}`)
 
-  // 意图分类
-  const nlpResult = await classifyIntent(text)
+  // P2: 加载近期对话记忆, 注入到 LLM 提示词, 让宠物"记得"之前聊过什么
+  const history = await getRecentHistory(student.id, 6)
+
+  // P1: 流式意图分类 —— LLM_STREAM=1 时逐字回传 reply_text (设备端实时字幕);
+  //     否则走普通分类 (单次下发完整回复)。两者最终都返回结构化 nlpResult。
+  let nlpResult
+  if (process.env.LLM_STREAM === '1') {
+    nlpResult = await classifyIntentStreaming(text, history, (reply) => {
+      try {
+        ws.send(JSON.stringify({ type: 'llm', text: reply, action: 'none' }))
+      } catch {}
+    })
+  } else {
+    nlpResult = await classifyIntent(text, history)
+  }
+
   await autoConfirmLazyLoad(student.user_id)
   const responseData = await applyIntent(student, nlpResult, now)
 
   const replyText = responseData.reply_text || '好的'
   ws.send(JSON.stringify({ type: 'llm', text: replyText, action: responseData.action }))
+
+  // P3: 广播语音会话事件，让网页管理端实时显示设备互动动态
+  try {
+    publishEvent('voice_session', {
+      studentId: student.id,
+      studentName: student.name,
+      text,
+      reply: replyText,
+      action: responseData.action
+    })
+  } catch (e) {
+    console.warn('⚠️ [WS] 语音会话事件广播失败:', e.message)
+  }
 
   // 记 chat_logs
   try {

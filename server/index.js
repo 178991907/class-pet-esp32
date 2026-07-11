@@ -15,7 +15,9 @@ import ruleRoutes from './routes/rules.js'
 import backupRoutes from './routes/backup.js'
 import settingsRoutes from './routes/settings.js'
 import deviceRoutes from './routes/device.js'
+import chatRoutes from './routes/chat.js'
 import { attachVoiceWs } from './services/voiceWs.js'
+import { subscribe } from './services/eventBus.js'
 
 const app = express()
 const PORT = process.env.PORT || 3002
@@ -92,6 +94,31 @@ app.use('/api/rules', ruleRoutes)
 app.use('/api/backup', backupRoutes)
 app.use('/api/settings', settingsRoutes)
 app.use('/api/device', deviceRoutes)
+app.use('/api/chat', chatRoutes)
+
+// ============ SSE 实时事件流 (P3: Web 实时刷新) ============
+// Web 管理端通过 EventSource 连接此端点，实时接收评价/升级/语音会话等事件。
+app.get('/api/events', (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no' // 关闭 nginx 缓冲，保证实时
+  })
+  res.write('retry: 3000\n\n')
+  res.write(`event: connected\ndata: ${JSON.stringify({ type: 'connected', payload: {}, timestamp: Date.now() })}\n\n`)
+
+  const unsubscribe = subscribe(res)
+  // 心跳保活，避免代理层断连
+  const heartbeat = setInterval(() => {
+    try { res.write(': ping\n\n') } catch { /* ignore */ }
+  }, 25000)
+
+  req.on('close', () => {
+    clearInterval(heartbeat)
+    unsubscribe()
+  })
+})
 
 // 健康检查（公开）
 app.get('/api/health', (req, res) => {

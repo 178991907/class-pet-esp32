@@ -27,6 +27,8 @@ import SystemModal from '@/components/modals/SystemModal.vue'
 import ChatLogsModal from '@/components/modals/ChatLogsModal.vue'
 import SchedulesModal from '@/components/modals/SchedulesModal.vue'
 import StudentDetailPanel from '@/components/modals/StudentDetailPanel.vue'
+import WebVoiceChat from '@/components/modals/WebVoiceChat.vue'
+import { useRealtime } from '@/composables/useRealtime'
 
 import type { Student } from '@/types'
 
@@ -37,6 +39,13 @@ const { confirmDialog, showConfirm } = useConfirm()
 const classStore = useClassStore()
 const studentStore = useStudentStore()
 const systemStore = useSystemStore()
+
+// P3: 实时刷新（设备互动实时推送到网页）
+const realtime = useRealtime()
+const rtConnected = realtime.connected
+const rtSimulated = realtime.simulated
+const rtLastEvent = realtime.lastEvent
+const showVoiceChat = ref(false)
 
 // ===== 角色管理 =====
 const currentRole = computed<'student' | 'teacher' | 'admin'>(() => {
@@ -211,6 +220,7 @@ onMounted(async () => {
     nextTick(() => {
       isLoaded.value = true
     })
+    realtime.connect()
   }
 })
 </script>
@@ -345,5 +355,23 @@ onMounted(async () => {
       @close="showAuthModal = false"
       @login="(user: any) => { toast.success(`欢迎，${user.username}！`); classStore.loadClasses() }"
     />
+
+    <!-- P3: 常驻麦克风按钮 + 实时刷新状态指示器 -->
+    <div class="fixed bottom-6 right-6 z-40 flex flex-col items-end gap-2">
+      <Transition name="fade">
+        <div v-if="rtLastEvent" class="max-w-[60vw] bg-white/90 backdrop-blur-lg shadow-lg rounded-2xl px-3 py-1.5 text-xs text-gray-600 border border-gray-100">
+          <span class="inline-block w-2 h-2 rounded-full mr-1.5 align-middle" :class="rtConnected ? 'bg-green-500' : 'bg-gray-300'"></span>
+          {{ rtSimulated ? '模拟' : '实时' }} · {{ rtLastEvent?.payload?.studentName || '设备' }} 刚有动态
+        </div>
+      </Transition>
+      <button
+        @click="showVoiceChat = true"
+        class="w-14 h-14 rounded-full bg-gradient-to-r from-violet-500 to-pink-500 text-white text-2xl shadow-xl hover:scale-105 active:scale-95 transition-all flex items-center justify-center"
+        title="宠物语音伙伴"
+      >🎤</button>
+    </div>
+
+    <!-- P3: Web 端宠物语音伙伴弹窗 -->
+    <WebVoiceChat :show="showVoiceChat" @close="showVoiceChat = false" />
   </div>
 </template>

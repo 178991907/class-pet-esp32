@@ -33,6 +33,13 @@ public:
   void showToast(const String& message, int duration_ms = 3000);
   void forceSwitchToNormal();
 
+  // P0: 语音期间"宠物常驻 + 实时字幕"覆盖层 (叠在当前屏之上, 不切换整页)
+  void enterVoiceOverlay(const String& title);
+  void setVoiceOverlayTitle(const String& title);
+  void setVoiceOverlayLevel(int db);
+  void setVoiceOverlayCaption(bool isUser, const String& text);
+  void exitVoiceOverlay();
+
   // 设置并在主页播放宠物动图
   void setPetGif(const void* data, size_t size);
   
@@ -103,6 +110,14 @@ public:
   // 全局 Toast
   lv_obj_t* _toast_label;
   lv_obj_t* _toast_container;
+  lv_timer_t* _toast_timer = nullptr;   // P2: 复用单一定时器, 避免多次 showToast 叠加提前消失
+
+  // P0: 语音覆盖层控件 (child of 当前屏, 透明背景, 宠物在底层保持可见)
+  lv_obj_t* _voice_overlay = nullptr;
+  lv_obj_t* _voice_title = nullptr;
+  lv_obj_t* _voice_level = nullptr;
+  lv_obj_t* _voice_you = nullptr;
+  lv_obj_t* _voice_pet = nullptr;
   
   void initNormalScreen();
   void initDiagScreen();

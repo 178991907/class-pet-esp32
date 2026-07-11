@@ -59,12 +59,28 @@ JSON 输出格式：
 3. 设定日程提醒，如"周三下午两点半提醒我背单词"、"每天早上八点叫我起床"，action 为 create_schedule。
 4. 其它无法识别或无意义的内容，action 为 none，reply_text 可作简短闲聊回复。`
 
+// 拼接带"近期记忆"的用户提示词 (P2: 多轮上下文, 让宠物有连续对话的陪伴感)
+function buildUserPrompt(text, context) {
+  if (context && context.length) {
+    return `【近期对话记忆, 用于保持连贯, 不要复述已说过的内容】\n${context}\n\n用户现在说: ${text}`
+  }
+  return text
+}
+
+// 从(可能未闭合的)流式累积文本中提取 reply_text (P1: 边生成边显示)
+function extractReplyText(raw) {
+  const cleaned = raw.replace(/^```json\s*/i, '').replace(/```$/, '')
+  const m = cleaned.match(/"reply_text"\s*:\s*"([^"]*)/)
+  return m ? m[1] : null
+}
+
 /**
  * 调用大模型进行意图分类
  * @param {string} text - 用户输入文本
+ * @param {string} context - 近期对话记忆 (P2)
  * @returns {Promise<object>} 分类结果 { action, task_name?, schedule_info?, reply_text }
  */
-export async function askLLMIntent(text) {
+export async function askLLMIntent(text, context = '') {
   const keyRow = await getAsync("SELECT value FROM settings WHERE key = 'openrouter_api_key'")
   const modelRow = await getAsync("SELECT value FROM settings WHERE key = 'openrouter_model'")
 
@@ -91,7 +107,7 @@ export async function askLLMIntent(text) {
       model,
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: text }
+        { role: 'user', content: buildUserPrompt(text, context) }
       ],
       temperature: 0.1
     })
@@ -116,17 +132,103 @@ export async function askLLMIntent(text) {
   return JSON.parse(cleanJson)
 }
 
+/**
+ * P1: 流式意图分类 —— 开启 stream:true, 边接收 token 边提取 reply_text 并回调 onDelta,
+ * 最终返回完整 JSON。若流式失败则抛出, 由 classifyIntentStreaming 降级。
+ */
+export async function askLLMIntentStreaming(text, context, onDelta) {
+  const keyRow = await getAsync("SELECT value FROM settings WHERE key = 'openrouter_api_key'")
+  const modelRow = await getAsync("SELECT value FROM settings WHERE key = 'openrouter_model'")
+
+  let apiKey = keyRow ? JSON.parse(keyRow.value) : ''
+  let model = modelRow ? JSON.parse(modelRow.value) : 'openrouter/free'
+  if (!apiKey) apiKey = process.env.OPENROUTER_API_KEY || ''
+  if (!apiKey) throw new Error('OpenRouter API Key not provided')
+
+  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': 'https://github.com/class-pet-garden',
+      'X-Title': 'ClassPetGarden'
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: buildUserPrompt(text, context) }
+      ],
+      temperature: 0.1,
+      stream: true
+    })
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    throw new Error(`OpenRouter stream error: ${response.status} - ${errorText}`)
+  }
+
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let raw = ''
+  let lastReply = null
+
+  for await (const chunk of response.body) {
+    buffer += decoder.decode(chunk, { stream: true })
+    let nl
+    while ((nl = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, nl).trim()
+      buffer = buffer.slice(nl + 1)
+      if (!line.startsWith('data:')) continue
+      const data = line.slice(5).trim()
+      if (data === '[DONE]') continue
+      try {
+        const j = JSON.parse(data)
+        const delta = j.choices?.[0]?.delta?.content || ''
+        if (!delta) continue
+        raw += delta
+        const reply = extractReplyText(raw)
+        if (reply !== null && reply !== lastReply) {
+          lastReply = reply
+          onDelta(reply)
+        }
+      } catch {
+        // 跳过非 JSON 行 (如心跳/注释)
+      }
+    }
+  }
+
+  const cleaned = raw.replace(/^```json\s*/i, '').replace(/```$/, '')
+  return JSON.parse(cleaned)
+}
+
 // ================= 统一入口 (带降级) =================
 
 /**
  * 意图分类统一入口
  * 优先调用大模型，失败后自动降级为正则分类器
  */
-export async function classifyIntent(text) {
+export async function classifyIntent(text, context = '') {
   try {
-    return await askLLMIntent(text)
+    return await askLLMIntent(text, context)
   } catch (err) {
     console.warn('⚠️ 大模型 API 调用失败，自动降级为内置正则分类器:', err.message)
     return regexClassifyIntent(text)
+  }
+}
+
+/**
+ * P1: 流式意图分类统一入口。开启 LLM_STREAM=1 时逐字回传 reply_text;
+ * 任何失败都降级为正则分类器 (并补发一次完整回复)。
+ */
+export async function classifyIntentStreaming(text, context, onDelta) {
+  try {
+    return await askLLMIntentStreaming(text, context, onDelta)
+  } catch (err) {
+    console.warn('⚠️ 流式大模型调用失败，降级为内置正则分类器:', err.message)
+    const r = regexClassifyIntent(text)
+    if (onDelta) onDelta(r.reply_text)
+    return r
   }
 }

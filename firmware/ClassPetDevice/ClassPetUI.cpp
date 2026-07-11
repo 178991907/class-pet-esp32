@@ -823,6 +823,116 @@ void ClassPetUI::showRecordingScreen(int volumeDb) {
 }
 
 // ==========================================
+// P0: 语音期间"宠物常驻 + 实时字幕"覆盖层
+// 约定: 调用方必须已持有 LVGL_LOCK (与 showProcessingScreen/showRecordingScreen 一致)。
+// 覆盖层作为当前屏(普通屏)的子对象, 背景透明, 底层宠物 GIF 保持可见;
+// 顶层显示 状态标题 + 声波条 + "你说/宠物说" 字幕气泡。
+// ==========================================
+void ClassPetUI::enterVoiceOverlay(const String& title) {
+  // 若已存在则先销毁, 保证幂等
+  if (_voice_overlay) {
+    lv_obj_del(_voice_overlay);
+    _voice_overlay = nullptr;
+  }
+  lv_obj_t* parent = lv_scr_act();
+  if (!parent) return;
+
+  _voice_overlay = lv_obj_create(parent);
+  lv_obj_set_size(_voice_overlay, 240, 320);
+  lv_obj_set_pos(_voice_overlay, 0, 0);
+  lv_obj_set_style_bg_opa(_voice_overlay, LV_OPA_TRANSPRANT, 0); // 透明, 露出底层宠物
+  lv_obj_set_style_border_width(_voice_overlay, 0, 0);
+  lv_obj_set_style_pad_all(_voice_overlay, 0, 0);
+  lv_obj_clear_flag(_voice_overlay, LV_OBJ_FLAG_SCROLLABLE);
+  // 点击屏幕 = 停止录音 (与旧 processing 屏一致)
+  lv_obj_add_flag(_voice_overlay, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(_voice_overlay, [](lv_event_t* e) {
+    DeviceStateMachine::getInstance().postEvent(EVENT_VOICE_RECORD_DONE);
+  }, LV_EVENT_CLICKED, NULL);
+
+  // 顶部状态标题
+  _voice_title = lv_label_create(_voice_overlay);
+  lv_obj_set_width(_voice_title, 220);
+  lv_obj_align(_voice_title, LV_ALIGN_TOP_MID, 0, 22);
+  lv_obj_set_style_text_color(_voice_title, LV_COLOR_TEXT, 0);
+  lv_obj_set_style_text_align(_voice_title, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_font(_voice_title, cjkFont(), 0);
+  lv_label_set_long_mode(_voice_title, LV_LABEL_LONG_WRAP);
+  lv_label_set_text(_voice_title, title.c_str());
+
+  // 声波/音量条
+  _voice_level = lv_bar_create(_voice_overlay);
+  lv_obj_set_size(_voice_level, 200, 14);
+  lv_obj_align(_voice_level, LV_ALIGN_TOP_MID, 0, 58);
+  lv_obj_set_style_bg_color(_voice_level, lv_color_hex(0x1E293B), 0);
+  lv_obj_set_style_bg_color(_voice_level, LV_COLOR_PRIMARY, LV_PART_INDICATOR);
+  lv_obj_set_style_radius(_voice_level, 7, 0);
+  lv_bar_set_range(_voice_level, 0, 100);
+  lv_bar_set_value(_voice_level, 0, LV_ANIM_OFF);
+
+  // "你说" 字幕气泡
+  _voice_you = lv_label_create(_voice_overlay);
+  lv_obj_set_width(_voice_you, 224);
+  lv_obj_align(_voice_you, LV_ALIGN_BOTTOM_MID, 0, -74);
+  lv_obj_set_style_text_color(_voice_you, LV_COLOR_TEXT, 0);
+  lv_obj_set_style_text_align(_voice_you, LV_TEXT_ALIGN_LEFT, 0);
+  lv_obj_set_style_text_font(_voice_you, cjkFont(), 0);
+  lv_label_set_long_mode(_voice_you, LV_LABEL_LONG_WRAP);
+  lv_obj_set_style_bg_color(_voice_you, lv_color_white(), 0);
+  lv_obj_set_style_bg_opa(_voice_you, LV_OPA_85, 0);
+  lv_obj_set_style_radius(_voice_you, 8, 0);
+  lv_obj_set_style_pad_all(_voice_you, 6, 0);
+  lv_label_set_text(_voice_you, "");
+
+  // "宠物说" 字幕气泡
+  _voice_pet = lv_label_create(_voice_overlay);
+  lv_obj_set_width(_voice_pet, 224);
+  lv_obj_align(_voice_pet, LV_ALIGN_BOTTOM_MID, 0, -10);
+  lv_obj_set_style_text_color(_voice_pet, lv_color_hex(0x1E293B), 0);
+  lv_obj_set_style_text_align(_voice_pet, LV_TEXT_ALIGN_LEFT, 0);
+  lv_obj_set_style_text_font(_voice_pet, cjkFont(), 0);
+  lv_label_set_long_mode(_voice_pet, LV_LABEL_LONG_WRAP);
+  lv_obj_set_style_bg_color(_voice_pet, LV_COLOR_PRIMARY, 0);
+  lv_obj_set_style_bg_opa(_voice_pet, LV_OPA_20, 0);
+  lv_obj_set_style_radius(_voice_pet, 8, 0);
+  lv_obj_set_style_pad_all(_voice_pet, 6, 0);
+  lv_label_set_text(_voice_pet, "");
+}
+
+void ClassPetUI::setVoiceOverlayTitle(const String& title) {
+  if (_voice_title) lv_label_set_text(_voice_title, title.c_str());
+}
+
+void ClassPetUI::setVoiceOverlayLevel(int db) {
+  if (_voice_level) lv_bar_set_value(_voice_level, db, LV_ANIM_OFF);
+}
+
+void ClassPetUI::setVoiceOverlayCaption(bool isUser, const String& text) {
+  if (isUser) {
+    if (_voice_you) {
+      String s = "🗣 你说: " + text;
+      lv_label_set_text(_voice_you, s.c_str());
+    }
+  } else {
+    if (_voice_pet) {
+      String s = "🐾 宠物: " + text;
+      lv_label_set_text(_voice_pet, s.c_str());
+    }
+  }
+}
+
+void ClassPetUI::exitVoiceOverlay() {
+  if (_voice_overlay) {
+    lv_obj_del(_voice_overlay);
+    _voice_overlay = nullptr;
+    _voice_title = nullptr;
+    _voice_level = nullptr;
+    _voice_you = nullptr;
+    _voice_pet = nullptr;
+  }
+}
+
+// ==========================================
 // 6. 浮空 Toast 控制与定时自动销毁
 // ==========================================
 void ClassPetUI::showToast(const String& message, int duration_ms) {
@@ -831,8 +941,13 @@ void ClassPetUI::showToast(const String& message, int duration_ms) {
   lv_label_set_text(_toast_label, message.c_str());
   lv_obj_remove_flag(_toast_container, LV_OBJ_FLAG_HIDDEN);
   
-  // 创建一个一次性定时器，时间到后自动隐藏 Toast 容器
-  lv_timer_create(toastTimerCb, duration_ms, NULL);
+  // P2 修复: 复用同一个定时器 (而非每次新建), 避免多个 Toast 叠加时
+  // 第二个定时器提前把容器隐藏, 导致前一个 Toast 被过早清除。
+  if (_toast_timer) {
+    lv_timer_delete(_toast_timer);
+    _toast_timer = nullptr;
+  }
+  _toast_timer = lv_timer_create(toastTimerCb, duration_ms, NULL);
 }
 
 void ClassPetUI::toastTimerCb(lv_timer_t* timer) {
@@ -840,6 +955,7 @@ void ClassPetUI::toastTimerCb(lv_timer_t* timer) {
   if (ui._toast_container) {
     lv_obj_add_flag(ui._toast_container, LV_OBJ_FLAG_HIDDEN);
   }
+  ui._toast_timer = nullptr;  // 标记定时器已结束, 下次 showToast 可重建
   // 销毁计时器本身
   lv_timer_delete(timer);
 }

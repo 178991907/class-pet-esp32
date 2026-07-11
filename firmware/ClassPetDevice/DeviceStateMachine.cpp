@@ -20,6 +20,11 @@
 // 电池 ADC 引脚 (适用于 Caturda / Sunton 2.8寸 S3 屏)
 #define PIN_BATTERY_ADC 9
 
+// P1: 轻量 VAD (静音自动断句) 参数 —— 检测到语音后, 若静音持续超过阈值则自动停止录音
+#define VAD_SILENCE_DB      -35    // 低于此 dB 视为静音 (依麦克风增益调整)
+#define VAD_SILENCE_MS      1000   // 静音持续超过此时长则断句
+#define VAD_MIN_SPEECH_MS   800    // 至少说过这么久才允许 VAD 断句, 避免环境噪声误触发
+
 // 电池平滑电压状态
 static float smoothed_voltage = -1.0f;
 
@@ -571,17 +576,38 @@ void DeviceStateMachine::loopState() {
         } else {
           Serial.println("⚠️ [WS] 连接失败, 本次退回原 HTTP 流程");
         }
+
+        // P0: 进入语音覆盖层 (宠物常驻 + 实时字幕), 不再切到转圈页
+        LVGL_LOCK();
+        ClassPetUI::getInstance().enterVoiceOverlay("🎙️ 我在听... 说完松手");
+        LVGL_UNLOCK();
       }
 
       uint32_t recordStart = millis();
       bool is_btn_start = (digitalRead(PHYSICAL_KEY_PIN) == LOW);
 
-      // 等待按键释放，或者超时 (实体键最长 10 秒，触屏固定 5 秒)，或者触摸屏收到停止事件
-      uint32_t timeout = is_btn_start ? 10000 : 5000;
+      // 录音上限放宽, 由 P1 的 VAD 负责"说完即停" (实体键最长 15s, 触屏 8s)
+      uint32_t timeout = is_btn_start ? 15000 : 8000;
+      uint32_t lastSpeechMs = recordStart;
+      uint32_t speechAccumMs = 0;
+      bool vadStop = false;
+
       while (millis() - recordStart < timeout) {
+        int db = audio->getRecordVolumeDb();
+        int lvl = constrain(map(db, VAD_SILENCE_DB, -5, 0, 100), 0, 100);
         LVGL_LOCK();
-        ClassPetUI::getInstance().showRecordingScreen(audio->getRecordVolumeDb());
+        ClassPetUI::getInstance().setVoiceOverlayLevel(lvl);
         LVGL_UNLOCK();
+
+        // P1: 轻量 VAD —— 有语音则累计, 静音持续超阈值且已说满最短时长 -> 自动断句
+        if (lvl > 10) {
+          speechAccumMs += 100;
+          lastSpeechMs = millis();
+        }
+        if (speechAccumMs > VAD_MIN_SPEECH_MS && (millis() - lastSpeechMs) > VAD_SILENCE_MS) {
+          vadStop = true;
+          break;
+        }
 
         if (is_btn_start) {
           if (digitalRead(PHYSICAL_KEY_PIN) == HIGH) break;
@@ -595,6 +621,7 @@ void DeviceStateMachine::loopState() {
         }
         vTaskDelay(pdMS_TO_TICKS(100));
       }
+      if (vadStop) Serial.println("🎙️ [VAD] 检测到静音, 自动停止录音");
 
       if (!is_btn_start) {
          DeviceEvent ev;
@@ -619,7 +646,7 @@ void DeviceStateMachine::loopState() {
 
     case STATE_PROCESSING: {
       LVGL_LOCK();
-      ClassPetUI::getInstance().showProcessingScreen("识别中...");
+      ClassPetUI::getInstance().setVoiceOverlayTitle("💭 识别中...");
       LVGL_UNLOCK();
 
       // ---- Route A (原 HTTP 流程): 整段 WAV 上传 ----
@@ -628,6 +655,7 @@ void DeviceStateMachine::loopState() {
         ApiClient::postVoiceAudio("/record.wav", res);
         if (res.success) {
           LVGL_LOCK();
+          ClassPetUI::getInstance().exitVoiceOverlay();
           ClassPetUI::getInstance().showToast(res.reply_text, 4000);
           LVGL_UNLOCK();
           if (res.audio_url.length() > 0) {
@@ -638,6 +666,7 @@ void DeviceStateMachine::loopState() {
           }
         } else {
           LVGL_LOCK();
+          ClassPetUI::getInstance().exitVoiceOverlay();
           ClassPetUI::getInstance().showToast(res.error_msg.c_str(), 3000);
           LVGL_UNLOCK();
           _state = STATE_NORMAL_ONLINE;
@@ -662,7 +691,12 @@ void DeviceStateMachine::loopState() {
       if (!voiceWs.connected()) {
         if (_lastReplyText.length() > 0) {
           LVGL_LOCK();
+          ClassPetUI::getInstance().exitVoiceOverlay();
           ClassPetUI::getInstance().showToast(_lastReplyText, 4000);
+          LVGL_UNLOCK();
+        } else {
+          LVGL_LOCK();
+          ClassPetUI::getInstance().exitVoiceOverlay();
           LVGL_UNLOCK();
         }
         voiceWs.close();
@@ -673,6 +707,9 @@ void DeviceStateMachine::loopState() {
       // 超时保护: 20 秒未收到任何音频则退出
       if (millis() - _state_start_time > 20000) {
         Serial.println("⚠️ [WS] 处理超时, 强制退出");
+        LVGL_LOCK();
+        ClassPetUI::getInstance().exitVoiceOverlay();
+        LVGL_UNLOCK();
         voiceWs.close();
         _state = STATE_NORMAL_ONLINE;
       }
@@ -681,7 +718,7 @@ void DeviceStateMachine::loopState() {
 
     case STATE_PLAYING_AUDIO: {
       LVGL_LOCK();
-      ClassPetUI::getInstance().showProcessingScreen("播放中...");
+      ClassPetUI::getInstance().setVoiceOverlayTitle("🔊 宠物正在说...");
       LVGL_UNLOCK();
 
       if (_pcmMode) {
@@ -694,6 +731,9 @@ void DeviceStateMachine::loopState() {
           audio->stopPcmPlayback();
           voiceWs.close();
           Serial.println("🛑 [WS] 用户打断, 已 abort");
+          LVGL_LOCK();
+          ClassPetUI::getInstance().exitVoiceOverlay();
+          LVGL_UNLOCK();
           _state = STATE_NORMAL_ONLINE;
           break;
         }
@@ -706,7 +746,12 @@ void DeviceStateMachine::loopState() {
             voiceWs.close();
             if (_lastReplyText.length() > 0) {
               LVGL_LOCK();
+              ClassPetUI::getInstance().exitVoiceOverlay();
               ClassPetUI::getInstance().showToast(_lastReplyText, 3000);
+              LVGL_UNLOCK();
+            } else {
+              LVGL_LOCK();
+              ClassPetUI::getInstance().exitVoiceOverlay();
               LVGL_UNLOCK();
             }
             Serial.println("✅ [WS] PCM 播放完成, 回到待机");
@@ -718,6 +763,9 @@ void DeviceStateMachine::loopState() {
           Serial.println("⚠️ [WS] PCM 播放超时, 强制退出");
           audio->stopPcmPlayback();
           voiceWs.close();
+          LVGL_LOCK();
+          ClassPetUI::getInstance().exitVoiceOverlay();
+          LVGL_UNLOCK();
           _state = STATE_NORMAL_ONLINE;
         }
       } else {
@@ -726,7 +774,12 @@ void DeviceStateMachine::loopState() {
         if (!audio->isPlaying() && millis() - _state_start_time > 1500) {
           if (_lastReplyText.length() > 0) {
             LVGL_LOCK();
+            ClassPetUI::getInstance().exitVoiceOverlay();
             ClassPetUI::getInstance().showToast(_lastReplyText, 3000);
+            LVGL_UNLOCK();
+          } else {
+            LVGL_LOCK();
+            ClassPetUI::getInstance().exitVoiceOverlay();
             LVGL_UNLOCK();
           }
           voiceWs.close();
@@ -734,6 +787,9 @@ void DeviceStateMachine::loopState() {
         } else if (millis() - _state_start_time > 30000) {
           audio->stopAudio();
           voiceWs.close();
+          LVGL_LOCK();
+          ClassPetUI::getInstance().exitVoiceOverlay();
+          LVGL_UNLOCK();
           _state = STATE_NORMAL_ONLINE;
         }
       }
@@ -804,13 +860,18 @@ void DeviceStateMachine::handleWsText(const String& text) {
     const char* t = doc["text"] | "";
     _sttText = t;
     Serial.printf("📝 [WS] ASR 识别: %s\n", t);
+    // P0: 实时字幕 —— 你说的内容直接浮现在宠物屏上, 不再用一闪而过的 Toast
     LVGL_LOCK();
-    ClassPetUI::getInstance().showToast(String("你说: ") + t, 3000);
+    ClassPetUI::getInstance().setVoiceOverlayCaption(true, t);
     LVGL_UNLOCK();
   } else if (strcmp(type, "llm") == 0) {
     const char* t = doc["text"] | "";
     _lastReplyText = t;
     Serial.printf("💬 [WS] 大模型回复: %s\n", t);
+    // P1: 流式字幕 —— llm 消息为累计全文, 每收到一段就刷新"宠物说"气泡
+    LVGL_LOCK();
+    ClassPetUI::getInstance().setVoiceOverlayCaption(false, t);
+    LVGL_UNLOCK();
   } else if (strcmp(type, "tts") == 0) {
     if (doc.containsKey("state")) {
       const char* st = doc["state"] | "";

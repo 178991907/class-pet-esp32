@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { getAsync, allAsync, runAsync } from '../db.js'
 import { authMiddleware } from '../middleware/auth.js'
 import { calculateLevel } from '../utils/level.js'
+import { publishEvent } from '../services/eventBus.js'
 
 const router = Router()
 
@@ -47,7 +48,7 @@ router.post('/', authMiddleware, async (req, res) => {
 
       await runAsync('UPDATE students SET pet_exp = ?, pet_level = ? WHERE id = ?', newExp, newLevel, studentId)
 
-      return res.json({
+      const result = {
         id,
         timestamp: now,
         petLevel: newLevel,
@@ -55,9 +56,31 @@ router.post('/', authMiddleware, async (req, res) => {
         levelUp: newLevel > student.pet_level,
         levelDown: newLevel < student.pet_level,
         graduated
-      })
+      }
+      // P3: 实时广播评价与升级事件
+      try {
+        publishEvent('evaluation', {
+          studentId,
+          studentName: student?.name,
+          points, reason, category,
+          petLevel: newLevel,
+          levelUp: result.levelUp,
+          graduated
+        })
+        if (result.levelUp) {
+          publishEvent('levelup', { studentId, studentName: student?.name, petLevel: newLevel })
+        }
+      } catch { /* 事件广播失败不影响主流程 */ }
+      return res.json(result)
     }
 
+    try {
+      publishEvent('evaluation', {
+        studentId,
+        studentName: student?.name,
+        points, reason, category
+      })
+    } catch { /* ignore */ }
     res.json({ id, timestamp: now })
   } catch (error) {
     res.status(500).json({ error: '添加评价失败' })
