@@ -1,0 +1,14 @@
+{
+  "name": "classpet-cloudflare",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "班级宠物园 Cloudflare Worker (API + 语音 DO) + D1 + Workers AI",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  }
+}

@@ -1,0 +1,38 @@
+name = "classpet-api"
+main = "src/worker.js"
+compatibility_date = "2024-11-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Workers AI 绑定(keyless, 免 API key)
+[ai]
+binding = "AI"
+
+# D1 主数据库
+[[d1_databases]]
+binding = "DB"
+database_name = "classpet"
+database_id = "REPLACE_WITH_YOUR_D1_ID"
+
+# KV(可选: 设备 token / 缓存) —— 不强制, 留空也可运行
+[[kv_namespaces]]
+binding = "KV"
+id = "REPLACE_WITH_YOUR_KV_ID"
+
+# 语音 Durable Object(持有 WebSocket 长连接)
+[[durable_objects.bindings]]
+name = "VOICE_DO"
+class_name = "VoiceDO"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["VoiceDO"]
+
+# R2(可选: 存放字体 cjk16.bin) —— 不强制
+# [[r2_buckets]]
+# binding = "BUCKET"
+# bucket_name = "classpet-assets"
+
+# 可选环境变量(不填则用代码内置默认值)
+# [vars]
+# SECRET = "改成你自己的随机串"
+# SALT = "改成你自己的随机串"
