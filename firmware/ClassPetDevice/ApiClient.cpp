@@ -428,9 +428,19 @@ bool ApiClient::downloadAsset(const String& petType, int petLevel) {
   
   // 版本号与 DeviceStateMachine::loadPetGif 保持一致
   String filename = "/" + petType + "_" + String(petLevel) + "_v4.gif";
+  String tmpFilename = filename + ".tmp";
+  
   if (SD_MMC.exists(filename)) {
-    // 已经存在，无需下载
-    return true;
+    fs::File existing = SD_MMC.open(filename, "r");
+    size_t existingSize = existing ? existing.size() : 0;
+    if (existing) existing.close();
+    if (existingSize > 0) {
+      DEBUG_PRINTF("🌐 宠物素材已存在且有效: %s (%u 字节)\n", filename.c_str(), existingSize);
+      return true;
+    }
+    // 文件存在但大小为 0（之前下载中断损坏），删除并重新下载
+    DEBUG_PRINTF("⚠️ 宠物素材文件损坏(0字节): %s，将重新下载\n", filename.c_str());
+    SD_MMC.remove(filename);
   }
   
   if (WiFi.status() != WL_CONNECTED) return false;
@@ -452,8 +462,6 @@ bool ApiClient::downloadAsset(const String& petType, int petLevel) {
   http.setReuse(false);
   http.setTimeout(15000); // 15秒超时，给 TLS 握手留足时间
   
-  // 已经移至 ApiClient::init 进行全局初始化
-  
   if (targetUrl.startsWith("https")) {
     http.begin(secureClient, targetUrl); // HTTPS 必须使用 secureClient
   } else {
@@ -470,7 +478,7 @@ bool ApiClient::downloadAsset(const String& petType, int petLevel) {
     // 校验 content-type，防止 SPA 路由返回 HTML 而非真正的图片
     String contentType = http.header("Content-Type");
     DEBUG_PRINTF("📦 素材 Content-Type: %s\n", contentType.c_str());
-    if (contentType.length() > 0 && contentType.indexOf("image") < 0 && contentType.indexOf("octet") < 0) {
+    if (contentType.length() > 0 && contentType.indexOf("image") < 0 && contentType.indexOf("octet") < 0 && contentType.indexOf("gif") < 0) {
       DEBUG_PRINTF("❌ 素材下载返回了错误的类型: %s（不是图片）\n", contentType.c_str());
       http.end();
       return false;
@@ -479,9 +487,9 @@ bool ApiClient::downloadAsset(const String& petType, int petLevel) {
     int size = http.getSize();
     WiFiClient* stream = http.getStreamPtr();
     
-    fs::File f = SD_MMC.open(filename, "w");
+    fs::File f = SD_MMC.open(tmpFilename, "w");
     if (!f) {
-      DEBUG_PRINTLN("❌ 无法创建本地文件保存素材");
+      DEBUG_PRINTLN("❌ 无法创建临时文件保存素材");
       http.end();
       return false;
     }
@@ -508,10 +516,21 @@ bool ApiClient::downloadAsset(const String& petType, int petLevel) {
     http.end();
     
     if (written > 0) {
-      DEBUG_PRINTF("✅ 素材下载并保存成功，大小: %d 字节\n", written);
-      return true;
+      // 原子替换：删除旧文件（如有），重命名临时文件
+      if (SD_MMC.exists(filename)) {
+        SD_MMC.remove(filename);
+      }
+      if (SD_MMC.rename(tmpFilename.c_str(), filename.c_str())) {
+        DEBUG_PRINTF("✅ 素材下载并保存成功，大小: %d 字节\n", written);
+        return true;
+      } else {
+        DEBUG_PRINTLN("❌ 临时文件重命名失败");
+        SD_MMC.remove(tmpFilename);
+        return false;
+      }
     } else {
-      DEBUG_PRINTLN("❌ 素材写入文件失败");
+      DEBUG_PRINTLN("❌ 素材写入文件失败（0字节）");
+      SD_MMC.remove(tmpFilename);
       return false;
     }
   } else {
