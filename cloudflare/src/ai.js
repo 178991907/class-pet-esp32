@@ -2,7 +2,7 @@
 // ASR 用 Workers AI Whisper(keyless)；LLM 用 Workers AI Llama(中文)；TTS 复用 keyless 的 Google TTS 代理(设备直接拉 MP3)。
 
 const WHISPER_MODEL = '@cf/openai/whisper'
-const LLM_MODEL = '@cf/meta/llama-3.1-8b-instruct'
+const LLM_MODEL = '@cf/meta/llama-4-scout-17b-16e-instruct'
 
 // ============ 工具 ============
 
@@ -105,17 +105,14 @@ function extractJson(content) {
 export async function classifyIntent(env, text, context = '') {
   try {
     const result = await env.AI.run(LLM_MODEL, {
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: buildUserPrompt(text, context) }
-      ],
+      prompt: `${SYSTEM_PROMPT}\n\n${buildUserPrompt(text, context)}`,
       temperature: 0.1
     })
     const content = result?.response || result?.text || ''
     if (!content) throw new Error('empty LLM response')
     return extractJson(content)
   } catch (err) {
-    console.warn('⚠️ [AI] 意图分类失败，降级正则:', err.message)
+    console.warn('⚠️ [AI] 意图分类失败，降级正则:', err && err.message)
     return regexClassifyIntent(text)
   }
 }
@@ -127,15 +124,14 @@ export async function petChat(env, message, history = '') {
   const userContent = history ? `${history}\n小朋友: ${message}` : message
   try {
     const result = await env.AI.run(LLM_MODEL, {
-      messages: [
-        { role: 'system', content: PET_SYSTEM },
-        { role: 'user', content: userContent }
-      ],
+      prompt: `${PET_SYSTEM}\n\n${userContent}`,
       temperature: 0.8,
       max_tokens: 120
     })
-    return (result?.response || result?.text || '').trim() || '我听到啦～能再说清楚一点吗？'
-  } catch {
+    const text = (result?.response || result?.text || '').trim()
+    return text || '我听到啦～能再说清楚一点吗？'
+  } catch (e) {
+    console.warn('⚠️ [AI] petChat 失败, 兜底:', e && e.message)
     return '哎呀，我刚才走神了，能再跟我说一遍吗？🐾'
   }
 }

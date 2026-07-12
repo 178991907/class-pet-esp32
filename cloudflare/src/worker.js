@@ -623,9 +623,18 @@ async function publishEvent(env, type, payload) {
 // ============ 入口 ============
 export default {
   async fetch(request, env, ctx) {
-    bindDb(env.DB)
-    setSecrets(env)
-    await ensureSeed(env)
-    return handleApi(request, env, ctx)
+    try {
+      bindDb(env.DB)
+      setSecrets(env)
+      await ensureSeed(env)
+      return handleApi(request, env, ctx)
+    } catch (e) {
+      const msg = (e && e.message) ? e.message : String(e)
+      const stack = e && e.stack ? String(e.stack) : ''
+      return new Response(JSON.stringify({ error: msg, stack }), {
+        status: 500,
+        headers: { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' }
+      })
+    }
   }
 }

@@ -11,12 +11,12 @@ binding = "AI"
 [[d1_databases]]
 binding = "DB"
 database_name = "classpet"
-database_id = "REPLACE_WITH_YOUR_D1_ID"
+database_id = "7af6a959-443f-44e7-85ea-bc933a3f3508"
 
-# KV(可选: 设备 token / 缓存) —— 不强制, 留空也可运行
-[[kv_namespaces]]
-binding = "KV"
-id = "REPLACE_WITH_YOUR_KV_ID"
+# KV(可选: 设备 token / 缓存) —— 当前未使用, 留空也可运行; 如需启用请取消注释并填入 id
+# [[kv_namespaces]]
+# binding = "KV"
+# id = "YOUR_KV_ID"
 
 # 语音 Durable Object(持有 WebSocket 长连接)
 [[durable_objects.bindings]]
@@ -25,7 +25,7 @@ class_name = "VoiceDO"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["VoiceDO"]
+new_sqlite_classes = ["VoiceDO"]
 
 # R2(可选: 存放字体 cjk16.bin) —— 不强制
 # [[r2_buckets]]
