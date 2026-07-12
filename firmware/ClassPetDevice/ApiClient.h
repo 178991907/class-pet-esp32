@@ -55,10 +55,11 @@ struct VoiceActionResponse {
 
 class ApiClient {
 public:
-  static void init(const String& serverUrl, const String& secret, const String& proxyIp = "");
+  static void init(const String& serverUrl, const String& secret, const String& proxyIp = "", const String& webUrl = "");
 
   static String getProxyIp() { return proxy_ip; }
   static String getServerUrl() { return server_url; }
+  static String getWebUrl() { return web_url; }
   // 返回 server_url + api_prefix + path (path 可带或不带前导 /)，适配 Cloudflare Worker 根路径 /api
   static String buildApiUrl(const String& path);
 
@@ -92,6 +93,7 @@ private:
   static String api_prefix;
   static String device_secret;
   static String proxy_ip;
+  static String web_url;      // 静态资源站点（如宠物 GIF），通常与 API 域名不同
 
   // 通用的 HTTP 请求发送并注入 Headers 签名
   static int sendRequest(const String& method, const String& path, const String& body, String& response);

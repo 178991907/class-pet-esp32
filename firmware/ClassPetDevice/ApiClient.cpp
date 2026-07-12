@@ -23,6 +23,7 @@ String ApiClient::server_url = "";
 String ApiClient::api_prefix = "/api";
 String ApiClient::device_secret = "";
 String ApiClient::proxy_ip = "";
+String ApiClient::web_url = "";
 DiagnosticInfo lastDiagnostic = {false, "", "", "", 0, 0, ""};
 
 #if !defined(ESP8266)
@@ -73,10 +74,11 @@ public:
 static HTTPClient httpClient;
 static bool clientsInitialized = false;
 
-void ApiClient::init(const String& serverUrl, const String& secret, const String& proxyIp) {
+void ApiClient::init(const String& serverUrl, const String& secret, const String& proxyIp, const String& webUrl) {
   server_url = serverUrl;
   device_secret = secret;
   proxy_ip = proxyIp;
+  web_url = webUrl;
   
   #if !defined(ESP8266)
     secureClient.setInsecure();
@@ -101,8 +103,31 @@ void ApiClient::init(const String& serverUrl, const String& secret, const String
     server_url = server_url.substring(0, server_url.length() - 4);
     api_prefix = "/api";
   }
+
+  // 静态资源站点（宠物 GIF 等）默认与 API 域名不同：
+  // 若未显式提供 web_url，则按 api.xxx -> pet.xxx 的约定自动推导；
+  // 仍无法推导则回退到 API 域名本身。
+  if (web_url.length() == 0) {
+    if (server_url.startsWith("https://api.")) {
+      web_url = "https://pet." + server_url.substring(12);
+    } else if (server_url.startsWith("http://api.")) {
+      web_url = "http://pet." + server_url.substring(11);
+    } else {
+      web_url = server_url;
+    }
+  }
+  if (web_url.endsWith("/")) {
+    web_url = web_url.substring(0, web_url.length() - 1);
+  }
+  // 去除可能误填的 /api 或 /pet-garden 后缀，避免静态资源 404
+  if (web_url.endsWith("/api")) {
+    web_url = web_url.substring(0, web_url.length() - 4);
+  }
+  if (web_url.endsWith("/pet-garden")) {
+    web_url = web_url.substring(0, web_url.length() - 11);
+  }
   
-  DEBUG_PRINTF("🚀 API 客户端就绪。指向 URL: %s%s\n", server_url.c_str(), api_prefix.c_str());
+  DEBUG_PRINTF("🚀 API 客户端就绪。API URL: %s%s, 静态资源: %s\n", server_url.c_str(), api_prefix.c_str(), web_url.c_str());
 }
 
 String ApiClient::buildApiUrl(const String& path) {
@@ -410,13 +435,12 @@ bool ApiClient::downloadAsset(const String& petType, int petLevel) {
   
   if (WiFi.status() != WL_CONNECTED) return false;
   
-  // 使用配置 of server_url（域名）下载 GIF 素材
-  // Vercel 部署后，public/pets/ 下的文件会被映射到根路径 /pets/
-  // 本地 Node 服务器也配置了 app.use('/pets', ...) 路由
-  String baseUrl = server_url;
+  // 使用静态资源站点 web_url（通常是 Pages 前端域名）下载 GIF 素材，
+  // 而非 API Worker 域名，因为 Worker 不托管 /pets/ 下的静态文件。
+  String baseUrl = web_url;
   // 确保 baseUrl 不以 / 结尾
   if (baseUrl.endsWith("/")) baseUrl = baseUrl.substring(0, baseUrl.length() - 1);
-  // 如果 server_url 包含 /pet-garden，则剥除该后缀（因为静态文件不走 /pet-garden 前缀）
+  // 兼容旧 Vercel 配置中可能存在的 /pet-garden 后缀（静态文件不走此前缀）
   if (baseUrl.endsWith("/pet-garden")) {
     baseUrl = baseUrl.substring(0, baseUrl.length() - 11);
   }
