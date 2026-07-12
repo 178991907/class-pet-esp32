@@ -20,7 +20,7 @@
 
 // 静态成员变量实例化
 String ApiClient::server_url = "";
-String ApiClient::api_prefix = "/pet-garden/api";
+String ApiClient::api_prefix = "/api";
 String ApiClient::device_secret = "";
 String ApiClient::proxy_ip = "";
 DiagnosticInfo lastDiagnostic = {false, "", "", "", 0, 0, ""};
@@ -90,11 +90,11 @@ void ApiClient::init(const String& serverUrl, const String& secret, const String
     server_url = server_url.substring(0, server_url.length() - 1);
   }
 
-  // 兼容三种填写方式：
-  // 1. https://xxx.vercel.app -> 自动走 /pet-garden/api
-  // 2. https://xxx.vercel.app/pet-garden -> 走 /api
-  // 3. https://xxx.vercel.app/api -> 直接走 /api
-  api_prefix = "/pet-garden/api";
+  // 兼容多种填写方式（默认走 /api，适配 Cloudflare Worker 根路径 API）：
+  // - https://xxx.workers.dev           -> /api
+  // - https://xxx.workers.dev/api       -> /api (剥除 /api 后缀)
+  // - https://xxx.vercel.app/pet-garden -> /api (Vercel 兼容, 保留 /pet-garden 前缀)
+  api_prefix = "/api";
   if (server_url.endsWith("/pet-garden")) {
     api_prefix = "/api";
   } else if (server_url.endsWith("/api")) {
@@ -103,6 +103,12 @@ void ApiClient::init(const String& serverUrl, const String& secret, const String
   }
   
   DEBUG_PRINTF("🚀 API 客户端就绪。指向 URL: %s%s\n", server_url.c_str(), api_prefix.c_str());
+}
+
+String ApiClient::buildApiUrl(const String& path) {
+  String p = path;
+  if (!p.startsWith("/")) p = "/" + p;
+  return server_url + api_prefix + p;
 }
 
 static void initDefaultStatusResponse(DeviceStatusResponse& res) {
@@ -507,7 +513,7 @@ bool ApiClient::downloadCjkFont() {
     return false;
   }
 
-  // 使用与 TTS/状态接口相同的路径拼接方式 (server_url + /pet-garden/api + endpoint)
+  // 使用与 TTS/状态接口相同的路径拼接方式 (server_url + api_prefix + endpoint)
   String targetUrl = server_url + api_prefix + "/device/font/cjk16.bin";
   DEBUG_PRINTF("🌐 [字体] 首次启动从服务器下载中文字库: %s\n", targetUrl.c_str());
 

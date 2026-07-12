@@ -192,8 +192,9 @@ void setup() {
 static void handleSerialCommands() {
   if (!Serial.available()) return;
 
-  String cmd = Serial.readStringUntil('\n');
-  cmd.trim();
+  String raw = Serial.readStringUntil('\n');
+  raw.trim();
+  String cmd = raw;
   cmd.toLowerCase();
 
   if (cmd.length() == 0) return;
@@ -208,7 +209,59 @@ static void handleSerialCommands() {
     Serial.println("  test_mic     - 录音 3 秒并报告电平 (测试麦克风硬件)");
     Serial.println("  test_tts     - 播放 Google TTS 中文语音 (测试网络+TTS+喇叭)");
     Serial.println("  test_tone    - 直接 I2S 1kHz 音调测试 (绕过 Audio 库, 验证硬件链路)");
+    Serial.println("  set_server <url> - 设置后端服务器地址并保存 (重启后生效)");
+    Serial.println("  set_proxy <ip>   - 设置 SNI 优选代理 IP/域名 (留空=直连, 重启后生效)");
+    Serial.println("  show_config      - 显示当前设备配置 (Server/Proxy/SSID)");
+    Serial.println("  reboot       - 立即重启设备");
     Serial.println("  help         - 显示此帮助信息");
+    return;
+  }
+
+  if (cmd == "reboot") {
+    Serial.println("🔄 重启设备...");
+    Serial.flush();
+    ESP.restart();
+    return;
+  }
+
+  if (cmd.startsWith("set_server")) {
+    int sp = raw.indexOf(' ');
+    String url = (sp >= 0) ? raw.substring(sp + 1) : "";
+    url.trim();
+    if (url.length() == 0) {
+      Serial.println("❌ 用法: set_server <url> 例如 set_server https://classpet-api.kenneth190415.workers.dev");
+      return;
+    }
+    strncpy(deviceConfig.server_url, url.c_str(), sizeof(deviceConfig.server_url) - 1);
+    deviceConfig.server_url[sizeof(deviceConfig.server_url) - 1] = '\0';
+    if (Storage::saveConfig(deviceConfig)) {
+      Serial.printf("✅ server_url 已更新为: %s  (已保存到存储, 重启后生效)\n", deviceConfig.server_url);
+    } else {
+      Serial.println("❌ 保存 server_url 失败 (存储写入错误)");
+    }
+    return;
+  }
+
+  if (cmd.startsWith("set_proxy")) {
+    int sp = raw.indexOf(' ');
+    String ip = (sp >= 0) ? raw.substring(sp + 1) : "";
+    ip.trim();
+    strncpy(deviceConfig.proxy_ip, ip.c_str(), sizeof(deviceConfig.proxy_ip) - 1);
+    deviceConfig.proxy_ip[sizeof(deviceConfig.proxy_ip) - 1] = '\0';
+    if (Storage::saveConfig(deviceConfig)) {
+      Serial.printf("✅ proxy_ip 已更新为: '%s'  (已保存, 重启后生效; 留空=直连)\n", deviceConfig.proxy_ip);
+    } else {
+      Serial.println("❌ 保存 proxy_ip 失败 (存储写入错误)");
+    }
+    return;
+  }
+
+  if (cmd == "show_config" || cmd == "config") {
+    Serial.println("📋 当前设备配置:");
+    Serial.printf("   - SSID: %s\n", deviceConfig.wifi_ssid);
+    Serial.printf("   - Server: %s\n", deviceConfig.server_url);
+    Serial.printf("   - Proxy IP: '%s' (空=直连)\n", deviceConfig.proxy_ip);
+    Serial.printf("   - Secret: %s\n", deviceConfig.device_secret);
     return;
   }
 
@@ -332,7 +385,7 @@ static void handleSerialCommands() {
     // 通过服务器代理访问 Google TTS (Google 在国内被墙, ESP32 直连失败)
     // 服务器从 Google 拉取音频后流式转发给 ESP32
     String ttsText = "你好，我是班级宠物园设备，喇叭和语音合成功能正常工作。";
-    String ttsUrl = String(deviceConfig.server_url) + "/pet-garden/api/device/tts-stream?text=" + urlEncode(ttsText);
+    String ttsUrl = ApiClient::buildApiUrl("/device/tts-stream?text=" + urlEncode(ttsText));
 
     Serial.printf("🗣️ [测试] TTS URL: %s\n", ttsUrl.c_str());
     Serial.flush();

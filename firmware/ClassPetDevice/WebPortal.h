@@ -194,7 +194,7 @@ const char HTTP_PORTAL_HTML[] PROGMEM = R"rawhtml(
             
             <div class="form-group">
                 <label for="server">后端 API 服务器地址</label>
-                <input type="text" id="server" name="server" value="https://pete.qqzy.de5.net" placeholder="Vercel 域名或本地局域网 IP" required>
+                <input type="text" id="server" name="server" value="https://classpet-api.kenneth190415.workers.dev" placeholder="后端 API 服务器地址 (Cloudflare Worker)" required>
             </div>
             
             <div class="form-group">

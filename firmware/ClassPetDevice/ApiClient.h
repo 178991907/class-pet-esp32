@@ -59,6 +59,8 @@ public:
 
   static String getProxyIp() { return proxy_ip; }
   static String getServerUrl() { return server_url; }
+  // 返回 server_url + api_prefix + path (path 可带或不带前导 /)，适配 Cloudflare Worker 根路径 /api
+  static String buildApiUrl(const String& path);
 
   // 1. 获取设备绑定的学生宠物状态
   static void getStatus(DeviceStatusResponse& res);

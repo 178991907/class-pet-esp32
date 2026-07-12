@@ -309,9 +309,8 @@ void DeviceStateMachine::loopState() {
         Network::syncNTP();
         String proxy = String(deviceConfig.proxy_ip);
         proxy.trim();
-        if (proxy.length() == 0) {
-          proxy = "ProxyIP.CMLiussss.net"; // 默认使用优选代理域名
-        }
+        // 未显式配置代理 IP/域名时直连 (Cloudflare Worker 可直接访问, 无需优选代理)
+        // 如需 SNI 优选代理, 可在配网页面填写代理 IP/域名
         ApiClient::init(deviceConfig.server_url, deviceConfig.device_secret, proxy);
 
         // 中文字库已编译进固件 (cjk16_bin.c), 在 ClassPetUI::init() 时已通过
