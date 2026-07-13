@@ -14,6 +14,7 @@
 #include "AudioHAL.h"
 #include "TomatoTimer.h"
 #include "WebSocketAudio.h"
+#include "WakeWordEngine.h"
 #include <WiFi.h>
 #include <ArduinoJson.h>
 
@@ -22,8 +23,8 @@
 
 // P1: 轻量 VAD (静音自动断句) 参数 —— 检测到语音后, 若静音持续超过阈值则自动停止录音
 #define VAD_SILENCE_DB      -35    // 低于此 dB 视为静音 (依麦克风增益调整)
-#define VAD_SILENCE_MS      1000   // 静音持续超过此时长则断句
-#define VAD_MIN_SPEECH_MS   800    // 至少说过这么久才允许 VAD 断句, 避免环境噪声误触发
+#define VAD_SILENCE_MS      600    // 静音持续超过此时长则断句 (从 1000 调短, 说完即停)
+#define VAD_MIN_SPEECH_MS   300    // 至少说过这么久才允许 VAD 断句 (从 800 调短, 儿童短句也能触发)
 
 // 电池平滑电压状态
 static float smoothed_voltage = -1.0f;
@@ -140,6 +141,16 @@ void DeviceStateMachine::init() {
   voiceWs.onBinary([this](const uint8_t* d, size_t l) { audio->feedPcm(d, l); });
   voiceWs.onText([this](const String& t) { this->handleWsText(t); });
   voiceWs.onClose([this]() { Serial.println("🔌 [WS] 语音流已断开"); _wsClosed = true; _voiceWsOk = false; });
+
+  // ===== 离线唤醒词引擎 (esp-sr) =====
+  // 唤醒时回调 -> 触发与语音按钮相同的 EVENT_VOICE_START, 进入录音流程。
+  WakeWordEngine::getInstance().setWakeCallback([this]() { this->postEvent(EVENT_VOICE_START); });
+  if (WakeWordEngine::getInstance().begin()) {
+    Serial.println("✅ [唤醒词] 引擎已启动, 空闲态将常驻监听 '" +
+      String(WakeWordEngine::getInstance().wakeWord()) + "'");
+  } else {
+    Serial.println("⚠️ [唤醒词] 引擎启动失败 (esp-sr 链接/模型缺失), 仅语音按钮可用");
+  }
 }
 
 void DeviceStateMachine::postEvent(DeviceEvent ev) {
@@ -231,7 +242,12 @@ void DeviceStateMachine::handleEvent(DeviceEvent ev) {
       break;
       
     case EVENT_VOICE_START:
-      if (_state == STATE_NORMAL_ONLINE) {
+      if (_state == STATE_NORMAL_ONLINE || _state == STATE_NORMAL_OFFLINE) {
+        // 3 秒录音冷却期, 防止上一次语音流程结束后立即重复进入
+        if (millis() - _voiceDoneTime < 3000) {
+          DEBUG_PRINTLN("🎙️ [状态机] 录音冷却期内, 忽略重复语音启动请求");
+          break;
+        }
         // 如果串口诊断模式正在使用 I2S，拒绝进入录音状态
         if (serial_diag_active) {
           DEBUG_PRINTLN("⚠️ [状态机] 串口诊断模式正在使用音频硬件，跳过语音录制请求");
@@ -239,6 +255,8 @@ void DeviceStateMachine::handleEvent(DeviceEvent ev) {
         }
         DEBUG_PRINTLN("🎙️ [状态机] 收到事件: 启动语音模拟对话");
         _state = STATE_RECORDING;
+      } else {
+        DEBUG_PRINTLN("🎙️ [状态机] 非待机状态, 忽略语音启动请求");
       }
       break;
       
@@ -290,6 +308,26 @@ void DeviceStateMachine::loopState() {
     _state_start_time = millis();
     last_state = _state;
   }
+
+  // ===== 离线唤醒词引擎: 空闲态常驻监听, 离开空闲态立即让出 I2S =====
+  // 空闲态 = 在线/离线待机; 进入录音/识别/播放时暂停, 把 I2S_NUM_0 交还录音/播放流程。
+  {
+    bool idle = (_state == STATE_NORMAL_ONLINE || _state == STATE_NORMAL_OFFLINE);
+    static bool wkeRunning = false;
+    bool canListen = idle && !serial_diag_active && !audio->isPlaying() && !audio->isRecording();
+    if (canListen && !wkeRunning) {
+      WakeWordEngine::getInstance().resume();
+      wkeRunning = true;
+    } else if (!idle && wkeRunning) {
+      WakeWordEngine::getInstance().pause();
+      wkeRunning = false;
+    } else if (serial_diag_active && wkeRunning) {
+      // 串口诊断占用音频硬件, 唤醒词引擎必须让出 I2S
+      WakeWordEngine::getInstance().pause();
+      wkeRunning = false;
+    }
+  }
+
   static unsigned long lastOfflineCheck = 0;
   
   switch (_state) {
@@ -559,6 +597,9 @@ void DeviceStateMachine::loopState() {
         _lastReplyText = "";
         _ttsFallbackUrl = "";
 
+        // 清空队列中录音前积压的语音事件, 避免它们之后被误触发
+        drainVoiceEvents();
+
         audio->startRecording();
 
         // 解析 server_url 并直连语音 WS (/ws/voice)
@@ -578,29 +619,49 @@ void DeviceStateMachine::loopState() {
 
         // P0: 进入语音覆盖层 (宠物常驻 + 实时字幕), 不再切到转圈页
         LVGL_LOCK();
-        ClassPetUI::getInstance().enterVoiceOverlay("🎙️ 我在听... 说完松手");
+        ClassPetUI::getInstance().enterVoiceOverlay("我在听... 说完松手");
+        ClassPetUI::getInstance().setVoiceOverlayCountdown(8);
         LVGL_UNLOCK();
       }
 
       uint32_t recordStart = millis();
       bool is_btn_start = (digitalRead(PHYSICAL_KEY_PIN) == LOW);
 
-      // 录音上限放宽, 由 P1 的 VAD 负责"说完即停" (实体键最长 15s, 触屏 8s)
+      // 根据触发方式给出不同的操作提示, 并在标题更新倒计时
+      LVGL_LOCK();
+      ClassPetUI::getInstance().setVoiceOverlayTitle(is_btn_start ? "我在听… 松开按键结束" : "我在听… 点击结束录音");
+      ClassPetUI::getInstance().setVoiceOverlayCountdown(is_btn_start ? 15 : 8);
+      LVGL_UNLOCK();
+
+      // 录音上限: 实体键最长 15s, 触屏按钮最长 8s (给儿童用, 句子短)
       uint32_t timeout = is_btn_start ? 15000 : 8000;
       uint32_t lastSpeechMs = recordStart;
       uint32_t speechAccumMs = 0;
       bool vadStop = false;
+      uint32_t lastCountdownUpdate = 0;
 
       while (millis() - recordStart < timeout) {
+        // 状态机任务自己驱动 I2S 读取，避免 loop() 被阻塞时录音数据丢失
+        if (audio) audio->update();
+
         int db = audio->getRecordVolumeDb();
         int lvl = constrain(map(db, VAD_SILENCE_DB, -5, 0, 100), 0, 100);
         LVGL_LOCK();
         ClassPetUI::getInstance().setVoiceOverlayLevel(lvl);
         LVGL_UNLOCK();
 
+        // 每 500ms 刷新一次倒计时, 让孩子/老师知道还能说多久
+        if (millis() - lastCountdownUpdate >= 500) {
+          int remaining = (int)((timeout - (millis() - recordStart) + 999) / 1000);
+          LVGL_LOCK();
+          ClassPetUI::getInstance().setVoiceOverlayCountdown(remaining);
+          LVGL_UNLOCK();
+          lastCountdownUpdate = millis();
+        }
+
         // P1: 轻量 VAD —— 有语音则累计, 静音持续超阈值且已说满最短时长 -> 自动断句
         if (lvl > 10) {
-          speechAccumMs += 100;
+          speechAccumMs += 50;
           lastSpeechMs = millis();
         }
         if (speechAccumMs > VAD_MIN_SPEECH_MS && (millis() - lastSpeechMs) > VAD_SILENCE_MS) {
@@ -618,7 +679,7 @@ void DeviceStateMachine::loopState() {
             }
           }
         }
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(50));
       }
       if (vadStop) Serial.println("🎙️ [VAD] 检测到静音, 自动停止录音");
 
@@ -634,6 +695,9 @@ void DeviceStateMachine::loopState() {
       audio->enableStreamUp(false);
       uint8_t* wavBuf = nullptr; size_t wavSize = 0;
       audio->stopRecording(wavBuf, wavSize);
+      // 清空录音期间可能积压的语音事件, 防止退出后残留事件立即触发重复倒计时
+      drainVoiceEvents();
+      _voiceDoneTime = millis(); // 标记本次语音流程结束, 用于后续冷却去抖
       if (_routeB && _voiceWsOk) {
         voiceWs.sendText("{\"type\":\"end\"}");
         Serial.println("📤 [WS] 已发送 end, 等待服务端 ASR/LLM/TTS");
@@ -645,7 +709,8 @@ void DeviceStateMachine::loopState() {
 
     case STATE_PROCESSING: {
       LVGL_LOCK();
-      ClassPetUI::getInstance().setVoiceOverlayTitle("💭 识别中...");
+      ClassPetUI::getInstance().setVoiceOverlayTitle("识别中...");
+      ClassPetUI::getInstance().setVoiceOverlayProcessing(true);
       LVGL_UNLOCK();
 
       // ---- Route A (原 HTTP 流程): 整段 WAV 上传 ----
@@ -717,7 +782,7 @@ void DeviceStateMachine::loopState() {
 
     case STATE_PLAYING_AUDIO: {
       LVGL_LOCK();
-      ClassPetUI::getInstance().setVoiceOverlayTitle("🔊 宠物正在说...");
+      ClassPetUI::getInstance().setVoiceOverlayTitle("宠物正在说...");
       LVGL_UNLOCK();
 
       if (_pcmMode) {
@@ -808,6 +873,19 @@ void DeviceStateMachine::loopState() {
 
 // 解析配置中的 server_url -> host / port / tls
 // 兼容 https://host, https://host:port, http://host:port, 以及带路径后缀
+void DeviceStateMachine::drainVoiceEvents() {
+  if (!_queue) return;
+  DeviceEvent ev;
+  // 只丢弃排在最前面的语音类事件; 遇到其他事件立即停止, 不破坏其顺序
+  while (xQueuePeek(_queue, &ev, 0) == pdTRUE) {
+    if (ev == EVENT_VOICE_START || ev == EVENT_VOICE_RECORD_DONE) {
+      xQueueReceive(_queue, &ev, 0);
+    } else {
+      break;
+    }
+  }
+}
+
 void DeviceStateMachine::parseServerUrl(const String& url, String& host, uint16_t& port, bool& useTls) {
   host = "";
   port = 0;

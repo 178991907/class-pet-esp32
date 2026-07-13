@@ -165,19 +165,80 @@ esp32:esp32:esp32s3:PartitionScheme=huge_app,PSRAM=opi,FlashSize=16M,CDCOnBoot=c
 
 ---
 
-## 6. 唤醒词（esp-sr）集成标准（未来工作）
+## 6. 唤醒词（esp-sr）集成标准（已落地 ✅ 2026-07-13）
 
-> 当前语音交互用“长按/点击按钮触发”，未启用离线唤醒词。一旦要做，按此标准。
+> 离线唤醒词已集成：`WakeWordEngine`（见固件 `WakeWordEngine.h/.cpp`）。
+> 空闲态常驻监听麦克风，检测到唤醒词即 `postEvent(EVENT_VOICE_START)` 进入语音流程
+> （与“长按/点击按钮触发”走同一条路径），并把 I2S_NUM_0 让给录音/播放。
 
-- 用 **esp-sr 1.0**（分支 `release/v1.0`，对应 IDF 4.4）。S3 预编译库在 `lib/esp32s3/*.a`。
-- S3 可用唤醒词：`嗨乐鑫`(hilexin) / `小爱同学`(xiaoaitongxue) / `Hi ESP`(hiesp) / `Alexa`(alexa)。
-  **`你好小智`(nihaoxiaozhi) 不在 1.0 的 S3 词集**，需 esp-sr 2.x（IDF 5.x），暂不可用。
-- 唤醒词模型放独立 `model` 分区（用 `movemodel.py` + `spiffsgen.py` 生成），
-  运行时 `esp_srmodel_init("model")` 加载。
-- AFE 配置见 §2.4，`memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM`（依赖 §5 的 PSRAM=opi）。
-- **arduino-cli 不自动发现 `components/` 目录**（已验证 `#include "esp_afe_sr_iface.h"` 报 “No such file”）。
-  集成方式二选一：① 用 `EXTRA_COMPONENT_DIRS` 环境变量指向 esp-sr 组件；② 改用 PlatformIO / 原生 IDF 构建。
-- 集成参考：xiaozhi `main/audio/wake_words/afe_wake_word.cc`。
+### 6.1 版本与 API（关键：与 xiaozhi 2.x 不同）
+
+- 用 **esp-sr 1.0**（分支 `release/v1.0`，对应 IDF 4.4）。预编译引擎库在 `lib/esp32s3/*.a`。
+- **API 是 `esp_afe_sr_1mic` + `afe->create_from_config(&cfg)` + `afe->feed()` / `afe->fetch()`**，
+  `fetch()` 返回 `afe_fetch_mode_t`，`AFE_FETCH_WWE_DETECTED == 1` 表示唤醒。
+  **不是** xiaozhi 2.x 的 `esp_afe_handle_from_config` / `afe_config_init` / `fetch_with_delay` /
+  `WAKENET_DETECTED` —— 这些是更新版 esp-sr 的 API，本仓库捆绑的 1.0 修订版没有这些符号。
+- `afe_config_t` **不用** `AFE_CONFIG_DEFAULT()` 宏（它依赖 `menuconfig` 的
+  `WAKENET_MODEL`/`WAKENET_COEFF` 宏，Arduino 无 menuconfig）。改为代码里逐字段赋值
+  （参考 `WakeWordEngine.cpp`）：`wakenet_model = &esp_sr_wakenet5_quantized`、
+  `wakenet_coeff = &get_coeff_nihaoxiaozhi_wn5`、`wakenet_mode = DET_MODE_90`（**单麦用 90，双麦才用 2CH**）、
+  `alloc_from_psram = AFE_PSRAM_MEDIA_COST`（依赖 §5 的 `PSRAM=opi`）。
+
+### 6.2 唤醒词模型（**嵌入 .a，无需 Flash 分区**）
+
+- S3 可用 wakenet5 模型系数（纯只读数据，**架构无关**，esp32 版的 `.a` 在 S3 也能直接链接）：
+  `嗨乐鑫`(hilexin) / `你好小智`(nihaoxiaozhi) / `你好小新`(nihaoxiaoxin) / `customized_word`。
+  （`小爱同学`/`Hi ESP`/`Alexa` 是 wakenet7/8，需对应引擎，本仓库未链接。）
+- 默认用 **`你好小智`(nihaoxiaozhi)** —— `src/esp32s3/libnihaoxiaozhi_wn5.a`（符号链接到
+  `/tmp/esp-sr/lib/esp32/libnihaoxiaozhi_wn5.a`）提供 `get_coeff_nihaoxiaozhi_wn5`，
+  引擎 `src/esp32s3/libwakenet.a` 提供 `esp_sr_wakenet5_quantized`。
+  > ⚠️ 模型 `.a` 以**符号链接**形式存在，指向本地 `/tmp/esp-sr/lib/...`（esp-sr 1.0 仓库 clone）。
+  > 换机/清 `/tmp` 后需重新 `git clone` 到 `/tmp/esp-sr` 或把 `.a` 实体拷入 `src/esp32s3/`，否则链接失败。
+- **模型权重直接编进固件**（链接 `lib*.a`），**不**走 `model` SPIFFS 分区 / `esp_srmodel_init`
+  （arduino-cli 没有 IDF 的分区烧录工具链，嵌入 .a 最省事）。
+  `libwakenet.a` 仍会引用 `get_model_base_path()`，由 `lib/esp-sr/src/model_path_stub.c` 提供桩实现满足链接。
+
+### 6.3 arduino-cli 集成方式（已验证可行 ✅ 2026-07-13）
+
+- **arduino-cli 不发现 `components/` 也不认 `EXTRA_COMPONENT_DIRS`**（已验证
+  `#include "esp_afe_sr_iface.h"` 报 “No such file”）。
+- **正确做法：把 esp-sr 当“预编译静态库 Arduino 库”（`precompiled=true`）** —— `firmware/lib/esp-sr/`：
+  - `src/*.h`（头文件，来自 `esp-sr/include/esp32s3/`）
+  - `src/esp32s3/*.a`（**按架构子目录放置**，arduino-cli 1.5.1 会自动把该目录下 `.a`
+    以 `-Lsrc/esp32s3 -l<name>` 形式链接，且位于主 `--start-group` 内，可被 sketch 引用解析）
+  - `src/model_path_stub.c`（提供 `get_model_base_path()` 桩，满足 `libwakenet.a` 的未定义引用）
+  - `library.properties`（设 `precompiled=true`；**不要**用 `ldflags` —— arduino-cli 1.5.1
+    **不读取** library.properties 的 `ldflags` 字段，写进去也不会进链接命令，已实测）
+- 编译只需 `--libraries /Users/Terry/Downloads/class-pet-main/firmware/lib`，**无需任何额外
+  `--build-property` 或手动 `-l`**。早期曾尝试用 `library.properties` 的 `ldflags` 写链接组，
+  但实测链接命令里完全没出现那些 `-l`，导致 `esp_afe_sr_1mic`/`esp_sr_wakenet5_quantized`/
+  `get_coeff_nihaoxiaozhi_wn5` 全部 undefined —— 改预编译库结构后解决。
+- 引擎 `.a`（符号链接到 `/tmp/esp-sr/lib/esp32s3/*`）：`libwakenet` `libhufzip` `libdl_lib`
+  `libc_speech_features` `libesp_audio_front_end` `libesp_audio_processor` `libmultinet`；
+  模型 `.a`（符号链接到 `/tmp/esp-sr/lib/esp32/*`，纯只读数据，S3 可直接链接）：
+  `libnihaoxiaozhi_wn5` `libhilexin_wn5`。
+  **切换唤醒词只需改 `WakeWordEngine` 的 `include` 与 `wakenet_coeff`，重新编译即可**
+  （两个模型 `.a` 都已链接，仅被引用的 `get_coeff_*` 符号进固件）。
+- **编译结果（2026-07-13 实测通过）**：Sketch 占 2,922,089 / 3,145,728 字节（92% of huge_app），
+  全局变量 59,604 / 327,680 字节（18%）。固件已能落进 huge_app 分区；esp-sr 体积偏大，
+  后续加功能需注意分区余量（约 220KB 余量）。
+
+### 6.4 运行时协调（避免 I2S 争夺）
+
+- `WakeWordEngine` 在空闲态（`STATE_NORMAL_ONLINE`/`STATE_NORMAL_OFFLINE`）**自己安装 I2S_NUM_0
+  的 RX 驱动**常驻监听；离开空闲态（录音/识别/播放）立即 `pause()` 卸载 I2S，交还音频硬件。
+- 检测到唤醒词 → `onWake` 回调 → 状态机 `postEvent(EVENT_VOICE_START)` → 进入录音
+  （`ESP32Audio::startRecording()` 重新安装 I2S RX）。**录音/播放期间唤醒词引擎暂停**，互不抢 I2S。
+- `serial_diag_active` 为真时（串口诊断命令占用音频硬件），唤醒词引擎也暂停让出 I2S。
+- ES8311 麦克风模式 + 功放静音由 `ESP32Audio::enterWakeMicMode()` 负责（不碰 I2S），
+  与 `startRecording()` 的麦克风配置共用同一套 REG14=0x0A/REG17=0xF0/30dB 经验值（见 §2.4）。
+
+### 6.5 集成参考
+
+- 权威 API 形态参考 xiaozhi `main/audio/wake_words/afe_wake_word.cc`（注意其 API 是 2.x，仅作
+  feed/fetch 任务结构参考，不要照搬 `esp_afe_handle_from_config`）。
+- 本仓库实现：`firmware/ClassPetDevice/WakeWordEngine.h` / `WakeWordEngine.cpp`、
+  `AudioHAL.h`（`enterWakeMicMode`）、`ESP32Audio.cpp`、`DeviceStateMachine.cpp`（init + loopState 协调）。
 
 ---
 
@@ -224,7 +285,7 @@ esp32:esp32:esp32s3:PartitionScheme=huge_app,PSRAM=opi,FlashSize=16M,CDCOnBoot=c
 | I2S 端口 | ⚠️ 宏误导 | `Board.h` 的 `I2S_NUM_USE` 标 `I2S_NUM_1`，实际代码用 `I2S_NUM_0`（已据实修正） |
 | 字库分离 TF 卡 | ✅ 正确 | `cjk16.bin` + `lv_binfont_create_from_buffer` |
 | 编译 FQBN | ✅ 正确 | `huge_app,PSRAM=opi,FlashSize=16M,CDCOnBoot=cdc` |
-| 离线唤醒词 | ⏸ 未做 | 待按 §6 集成 |
+| 离线唤醒词 | ✅ 已做 | `WakeWordEngine` + esp-sr 1.0（`esp_afe_sr_1mic`），默认唤醒词 `你好小智`，见 §6 |
 
 ---
 

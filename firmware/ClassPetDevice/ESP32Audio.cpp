@@ -376,6 +376,34 @@ void ESP32Audio::restorePlaybackI2S() {
   Serial.println("✅ [音频] I2S_NUM_0 播放驱动已恢复");
 }
 
+// ===== 离线唤醒词 (esp-sr) =====
+// 切换 ES8311 到麦克风输入并静音功放。不触碰 I2S 驱动 —— I2S RX 的
+// 安装/卸载完全由 WakeWordEngine 管理, 避免与录音/播放流程争夺 I2S_NUM_0。
+void ESP32Audio::enterWakeMicMode() {
+  // 录音时必须关闭功放 (FM8002E IO1 低电平使能), 否则扬声器播放环境噪音/回授,
+  // 淹没麦克风真实信号并产生吱啦声。
+  digitalWrite(AUDIO_EN_PIN, HIGH);
+  Serial.printf("🔇 [音频] 唤醒词监听: 静音功放 (IO%d=HIGH)\n", AUDIO_EN_PIN);
+
+  if (s_es8311_inited && s_es8311_handle) {
+    es8311_sample_frequency_config(s_es8311_handle,
+      REC_SAMPLE_RATE * REC_MCLK_MULTIPLE, REC_SAMPLE_RATE);
+    es8311_microphone_config(s_es8311_handle, false);
+    // 经 mic_sweep 实测: 本板 MEMS 麦克风接在 ES8311 的 REG14=0x0A 输入 (信号最强),
+    // ADC 音量 REG17=0xF0 电平最佳 (pk~16250 不削波)。
+    es8311_write_reg_local(ES8311_SYSTEM_REG14, 0x0A);
+    es8311_write_reg_local(ES8311_ADC_REG17, 0xF0);
+    es8311_microphone_gain_set(s_es8311_handle, ES8311_MIC_GAIN_30DB);
+    Serial.println("✅ [音频] 唤醒词监听: ES8311 已切到麦克风模式 (16kHz, REG14=0x0A, REG17=0xF0, GAIN_30DB)");
+  }
+}
+
+void ESP32Audio::exitWakeMicMode() {
+  // 恢复功放使能 (低电平), 让后续播放/录音流程能正常出声 (它们会自行重设 ES8311 模式)
+  digitalWrite(AUDIO_EN_PIN, LOW);
+  Serial.printf("🔊 [音频] 退出唤醒词监听: 恢复功放 (IO%d=LOW)\n", AUDIO_EN_PIN);
+}
+
 bool ESP32Audio::playAudioStream(const String& url) {
   if (is_recording) {
     uint8_t* p = nullptr; size_t s = 0;

@@ -52,6 +52,8 @@ public:
 
   // 10. 直接 I2S 音调测试（诊断用，绕过 Audio 库验证硬件链路）
   virtual void playTestTone(int frequency = 1000, int duration_ms = 2000) {}
+  // 10b. 麦克风寄存器扫描诊断（遍历 ES8311 REG14/REG17, 定位可用输入）
+  virtual void micSweepTest() {}
 
   // ================= 流式语音 (Route B: WebSocket 语音通道) =================
   // 11. 设置 PCM 上行回调: 录音时每读到一个 I2S 数据块就调用它 (设备端通过 WS 上传)
@@ -66,6 +68,13 @@ public:
   virtual void stopPcmPlayback() {}
   // 16. 是否正在 PCM 播放
   virtual bool isPcmPlaying() { return false; }
+
+  // ================= 离线唤醒词 (esp-sr) 支持 =================
+  // 17. 唤醒词常驻监听: 切换 ES8311 到麦克风输入并静音功放 (WakeWordEngine 调用)
+  //     不触碰 I2S 驱动 (WakeWordEngine 自己负责 I2S RX 安装/卸载)
+  virtual void enterWakeMicMode() { (void)0; }
+  // 18. 退出唤醒词监听: 恢复功放使能 (ES8311 模式由后续播放/录音流程设置)
+  virtual void exitWakeMicMode() { (void)0; }
 };
 
 /* 

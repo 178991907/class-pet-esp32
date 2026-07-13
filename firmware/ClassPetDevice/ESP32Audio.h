@@ -44,6 +44,10 @@ public:
   // 直接 I2S 音调测试（绕过 Audio 库，直接写 I2S 数据验证硬件链路）
   void playTestTone(int frequency = 1000, int duration_ms = 2000);
 
+  // 麦克风寄存器扫描诊断: 遍历 REG14(ADC输入选择)/REG17(ADC音量) 多种组合,
+  // 每种录 0.3s 输出纯 ASCII 的 RMS/峰值, 用于精确定位能采到真实语音的寄存器组合。
+  void micSweepTest();
+
   // ===== 流式语音 (Route B) =====
   void setPcmUploadCallback(std::function<void(const uint8_t*, size_t)> cb) override { _pcmUploadCb = cb; }
   void enableStreamUp(bool en) override { _streamUpEnabled = en; }
@@ -51,6 +55,11 @@ public:
   void feedPcm(const uint8_t* data, size_t len) override;
   void stopPcmPlayback() override;
   bool isPcmPlaying() override { return _pcm_playing; }
+
+  // ===== 离线唤醒词 (esp-sr) =====
+  // 切换 ES8311 到麦克风输入并静音功放 (不触碰 I2S 驱动, WakeWordEngine 自管 I2S)
+  void enterWakeMicMode() override;
+  void exitWakeMicMode() override;
 
 private:
   bool _pcm_playing = false;

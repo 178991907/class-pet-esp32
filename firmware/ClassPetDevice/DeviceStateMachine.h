@@ -39,6 +39,11 @@ public:
   void init();
   void postEvent(DeviceEvent ev);
   DeviceState getState() const { return _state; }
+  bool isRecording() const { return _state == STATE_RECORDING; }
+  // 语音会话进行中(录音/识别/播放)时, 语音按钮不应再排新事件, 防止积压事件触发重复倒计时
+  bool isVoiceSessionActive() const {
+    return _state == STATE_RECORDING || _state == STATE_PROCESSING || _state == STATE_PLAYING_AUDIO;
+  }
 
   // 在主 loop() 中驱动语音 WS 接收 (Core 1)
   void pollVoiceWs() { voiceWs.poll(); }
@@ -75,6 +80,7 @@ private:
   bool _pcmMode = false;           // true=PCM 直推播放, false=MP3 降级拉流
   bool _aborted = false;           // 用户是否已打断
   uint32_t _ttsDoneTime = 0;       // 收到 tts stop 的时间戳
+  uint32_t _voiceDoneTime = 0;     // 最近一次语音流程结束的时间戳 (用于冷却去抖)
   String _sttText;                 // ASR 识别文本
   String _lastReplyText;           // 最近一次 LLM 回复 (用于播放结束后吐司)
   String _ttsFallbackUrl;          // 服务端 PCM 解码失败时的降级 MP3 地址
@@ -82,6 +88,8 @@ private:
   void parseServerUrl(const String& url, String& host, uint16_t& port, bool& useTls);
   void handleWsText(const String& text);
   void uploadVoiceFrame(const uint8_t* d, size_t l);
+  // 清空队列中积压的语音事件(START/DONE), 防止退出录音态后残留事件立即触发重复倒计时
+  void drainVoiceEvents();
 };
 
 #endif // DEVICE_STATE_MACHINE_H
