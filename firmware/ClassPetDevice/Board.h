@@ -42,18 +42,19 @@
 // ==========================================
 // 3. 音频外设引脚配置 (ES8311 + FM8002E)
 // ==========================================
-// 按官方 Example_16_music / Example_17_echo 引脚定义:
+// 按官方 Example_16_music / Example_17_echo 引脚定义 + LCDwiki Wiki 确认:
 //   - ES8311 I2C 地址: 0x18 (CE pin low)
 //   - ES8311 I2C 与触摸屏共用 I2C 总线 (SDA=16, SCL=15)
 //   - FM8002E 功放使能: IO1, 低电平使能
-//   - I2S 全双工: TX 和 RX 同时工作在 I2S_NUM_1
-#define AUDIO_EN_PIN           1     // FM8002E 功放使能 (低电平使能)
+//   - I2S 端口: 本项目实际统一使用 I2S_NUM_0 (xiaozhi 参考实现同样用 I2S_NUM_0)
+//     录音装 RX 驱动、播放装 TX 驱动, 半双工切换, 录音时功放必须静音 (见 DEVELOPMENT_STANDARD.md §2)
+#define AUDIO_EN_PIN           1     // FM8002E 功放使能 (低电平使能; 录音时拉 HIGH 静音)
 #define I2S_MCLK_PIN           4     // I2S 主时钟 (MCLK)
 #define I2S_BCLK_PIN           5     // I2S 比特时钟 (BCLK)
 #define I2S_LRC_PIN            7     // I2S 左右声道时钟 (WS/LRCK)
-#define I2S_DOUT_PIN           8     // I2S 数据输出 (ESP32 → ES8311 → DAC → 喇叭)
-#define I2S_DIN_PIN            6     // I2S 数据输入 (ES8311 → ESP32, 麦克风)
-#define I2S_NUM_USE            I2S_NUM_1  // 官方示例使用 I2S_NUM_1
+#define I2S_DOUT_PIN           8     // I2S 数据输出 (ESP32 → ES8311 → DAC → 喇叭)  —— 喇叭脚锁定 GPIO8
+#define I2S_DIN_PIN            6     // I2S 数据输入 (ES8311 → ESP32, 麦克风)        —— 麦克风脚锁定 GPIO6
+#define I2S_NUM_USE            I2S_NUM_0  // 实际代码统一使用 I2S_NUM_0 (ESP32Audio.cpp)
 
 // ES8311 I2C 配置
 #define ES8311_I2C_ADDR        0x18  // ES8311 I2C 地址 (CE pin low)
@@ -82,7 +83,10 @@
 // 开发板: ESP32-S3 N16R8 (16MB Flash + 8MB OPI PSRAM)
 // 编译 FQBN:
 //   esp32:esp32:esp32s3:PartitionScheme=huge_app,PSRAM=opi,FlashSize=16M,CDCOnBoot=cdc
-#define AUDIO_SAMPLE_RATE      44100  // 官方示例使用 44100Hz
-#define AUDIO_MCLK_MULTIPLE    256    // MCLK = 采样率 * 256
+// 采样率策略 (详见 DEVELOPMENT_STANDARD.md §2 R4):
+//   - 录音 / ASR / 唤醒词: 必须 16000 Hz  (ESP32Audio.cpp 中 REC_SAMPLE_RATE = 16000)
+//   - 音乐 MP3 播放:        44100 Hz      (ESP32Audio.cpp 中 PLAYBACK_SAMPLE_RATE = 44100)
+// 本文件不再定义单一 "AUDIO_SAMPLE_RATE", 以免误导; 实际值见 ESP32Audio.cpp。
+#define AUDIO_MCLK_MULTIPLE    256    // MCLK = 采样率 * 256 (R5)
 
 #endif // BOARD_H

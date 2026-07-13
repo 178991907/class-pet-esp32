@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# ClassPetGarden pre-commit 钩子：在提交前拦截违反硬件开发标准(DEVELOPMENT_STANDARD.md)的改动。
+# 启用方式（已执行一次）：git config core.hooksPath .githooks
+# 兼容 macOS 默认 bash 3.2（不使用 mapfile）。
+set -uo pipefail
+
+RED='\033[0;31m'; YEL='\033[0;33m'; NC='\033[0m'
+FAIL=0
+
+# 仅检查固件 C/C++ 文件（bash 3.2 兼容：不用 mapfile）
+FILES=()
+while IFS= read -r line; do
+  [ -n "$line" ] && FILES+=("$line")
+done < <(git diff --cached --name-only --diff-filter=ACM 2>/dev/null | grep -E 'firmware/.*\.(cpp|h|ino)$' || true)
+
+if [ "${#FILES[@]}" -eq 0 ]; then
+  exit 0
+fi
+
+# 规则1：Board.h 的 I2S_NUM_USE 必须是 I2S_NUM_0（回退 NUM_1 会偏离标准 §2 R7）
+if git show :firmware/ClassPetDevice/Board.h 2>/dev/null | grep -Eq 'I2S_NUM_USE[[:space:]]+I2S_NUM_1'; then
+  echo -e "${RED}[pre-commit] 拦截:${NC} Board.h 的 I2S_NUM_USE 必须是 I2S_NUM_0（见 DEVELOPMENT_STANDARD.md §2 R7）" >&2
+  FAIL=1
+fi
+
+for f in "${FILES[@]}"; do
+  STAGED=$(git show ":$f" 2>/dev/null) || continue
+
+  # 规则2：麦克风绝不接喇叭脚 GPIO8（data_in 用 I2S_DOUT_PIN → Whisper 幻觉 "you"）
+  if printf '%s\n' "$STAGED" | grep -Eq 'data_in_num[[:space:]]*=[[:space:]]*I2S_DOUT_PIN'; then
+    echo -e "${RED}[pre-commit] 拦截:${NC} $f 把麦克风(data_in)接到了喇叭脚 I2S_DOUT_PIN(GPIO8)，会读到 DAC 数字垃圾导致 “you”（见 §2 R1）" >&2
+    FAIL=1
+  fi
+
+  # 规则3：startRecording 必须显式将功放拉 HIGH 静音（R3）
+  if printf '%s\n' "$STAGED" | grep -Eq 'void[[:space:]]+[A-Za-z_]+::startRecording'; then
+    if ! printf '%s\n' "$STAGED" | grep -Eq 'startRecording[^{]*\{[[:space:]]*[^}]*digitalWrite\([[:space:]]*AUDIO_EN_PIN[[:space:]]*,[[:space:]]*HIGH[[:space:]]*\)'; then
+      echo -e "${YEL}[pre-commit] 警告:${NC} $f 的 startRecording 未显式将 AUDIO_EN_PIN 拉 HIGH 静音功放（见 §2 R3），请确认。" >&2
+    fi
+  fi
+
+  # 规则4：录音采样率不得为 44.1k
+  if printf '%s\n' "$STAGED" | grep -Eq 'REC_SAMPLE_RATE[[:space:]]*=[[:space:]]*44100'; then
+    echo -e "${RED}[pre-commit] 拦截:${NC} $f REC_SAMPLE_RATE 必须是 16000（ASR/唤醒词要求，见 §2 R4）" >&2
+    FAIL=1
+  fi
+done
+
+if [ "$FAIL" -ne 0 ]; then
+  echo -e "${RED}提交被拦截。请先阅读 DEVELOPMENT_STANDARD.md 并修正上述违规。${NC}" >&2
+  exit 1
+fi
+
+echo "[pre-commit] 硬件标准检查通过。"
+exit 0
