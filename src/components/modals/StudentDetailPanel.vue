@@ -32,6 +32,12 @@ const currentRole = computed(() => {
 })
 const isManager = computed(() => currentRole.value === 'teacher' || currentRole.value === 'admin')
 
+function goAlarm() {
+  if (!studentStore.detailStudent) return
+  const id = studentStore.detailStudent.id
+  studentStore.closeDetailPanel()
+  router.push({ path: `/student/${id}/features`, query: { tab: 'alarm' } })
+}
 function goFeatures() {
   if (!studentStore.detailStudent) return
   const id = studentStore.detailStudent.id
@@ -74,7 +80,7 @@ async function handleDetailQuickAdd(rule: Rule) {
         <div class="relative bg-gradient-to-r from-orange-400 via-pink-400 to-purple-400 p-6 rounded-t-3xl">
           <div class="absolute top-4 right-4 left-4 flex justify-end">
             <div class="flex gap-2 flex-wrap justify-end max-w-full">
-              <button v-if="!isGuest" @click="systemStore.openSchedules(studentStore.detailStudent!)" class="px-3 py-2 bg-white/20 hover:bg-white/30 rounded-full flex items-center gap-1.5 text-white text-sm transition-colors whitespace-nowrap" title="定时日程提醒">
+              <button v-if="!isGuest" @click="goAlarm" class="px-3 py-2 bg-white/20 hover:bg-white/30 rounded-full flex items-center gap-1.5 text-white text-sm transition-colors whitespace-nowrap" title="定时日程提醒">
                 <span>📅</span><span class="font-medium">日程</span>
               </button>
               <button v-if="!isGuest" @click="goFeatures" class="px-3 py-2 bg-white/20 hover:bg-white/30 rounded-full flex items-center gap-1.5 text-white text-sm transition-colors whitespace-nowrap" title="日历 / 清单 / 闹铃 / 主人记忆">

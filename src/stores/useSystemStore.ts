@@ -28,11 +28,6 @@ export const useSystemStore = defineStore('system', () => {
   const loadingChatLogs = ref(false)
   const auditingStudent = ref<any>(null)
 
-  // 日程管理
-  const schedulesList = ref<any[]>([])
-  const loadingSchedules = ref(false)
-  const schedulingStudent = ref<any>(null)
-
   // 系统配置加载
   async function loadSystemData() {
     try {
@@ -148,55 +143,6 @@ export const useSystemStore = defineStore('system', () => {
     }
   }
 
-  // 日程管理
-  async function openSchedules(student: any) {
-    schedulingStudent.value = student
-    loadingSchedules.value = true
-    try {
-      const res = await api.get(`/device/schedules/student/${student.id}`)
-      schedulesList.value = res.data.schedules || []
-    } catch (err) {
-      toast.error('加载日程失败')
-    } finally {
-      loadingSchedules.value = false
-    }
-  }
-
-  async function addSchedule(dayOfWeek: number, timeStr: string, taskDesc: string) {
-    if (!schedulingStudent.value) return
-    if (!taskDesc.trim()) {
-      toast.error('请输入日程提醒内容')
-      return false
-    }
-    try {
-      await api.post(`/device/schedules/student/${schedulingStudent.value.id}`, {
-        day_of_week: dayOfWeek,
-        time_str: timeStr,
-        task_desc: taskDesc.trim()
-      })
-      toast.success('日程添加成功！')
-      const res = await api.get(`/device/schedules/student/${schedulingStudent.value.id}`)
-      schedulesList.value = res.data.schedules || []
-      return true
-    } catch (err) {
-      toast.error('添加日程失败')
-      return false
-    }
-  }
-
-  async function deleteSchedule(id: string) {
-    try {
-      await api.delete(`/device/schedules/${id}`)
-      toast.success('日程已删除')
-      if (schedulingStudent.value) {
-        const res = await api.get(`/device/schedules/student/${schedulingStudent.value.id}`)
-        schedulesList.value = res.data.schedules || []
-      }
-    } catch (err) {
-      toast.error('删除日程失败')
-    }
-  }
-
   // 聊天审计
   async function openChatLogs(student: any) {
     auditingStudent.value = student
@@ -230,10 +176,6 @@ export const useSystemStore = defineStore('system', () => {
     chatLogsList,
     loadingChatLogs,
     auditingStudent,
-    // 日程管理
-    schedulesList,
-    loadingSchedules,
-    schedulingStudent,
     // 操作
     loadSystemData,
     approveTask,
@@ -243,9 +185,6 @@ export const useSystemStore = defineStore('system', () => {
     handleUpdateUserRole,
     copyTeacherInviteLink,
     handleUpdateAdminPassword,
-    openSchedules,
-    addSchedule,
-    deleteSchedule,
     openChatLogs
   }
 })

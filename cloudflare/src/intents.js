@@ -39,6 +39,26 @@ function parseDate(t) {
   return `${y}-${mm}-${dd}`
 }
 
+function parseDay(t) {
+  const dayMap = { '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6, '日': 7, '天': 7 }
+  const m = t.match(/周([一二三四五六日天])/)
+  return m ? dayMap[m[1]] : null
+}
+
+function extractKeyword(t) {
+  return t
+    .replace(/(删除|取消|去掉|移除|清空|修改|编辑|调整|变更|把|将|里的|中的|的|那个|这个|改成|改为|成|为|到|一下|吧|呢|啊|哦|嗯|哈|呢)/g, '')
+    .trim()
+}
+
+function extractEditParts(t) {
+  const m = t.match(/[把将](.+?)(?:改成|改为|成|为|到)(.+)/)
+  if (m) return { oldClue: m[1].trim(), newClue: m[2].trim() }
+  const m2 = t.match(/修改(?:.*?)\s*(.+?)\s*(?:为|成|到)(.+)/)
+  if (m2) return { oldClue: m2[1].trim(), newClue: m2[2].trim() }
+  return null
+}
+
 function parseTime(t) {
   const m = t.match(/(\d{1,2})\s*[:：点]\s*(\d{1,2})?\s*分?/)
   if (m) {
@@ -62,7 +82,7 @@ export function matchCorpus(text) {
     return {
       action: 'help',
       params: {},
-      reply: '我可以做这些事：申报任务加分、查询积分和等级、设定日程提醒、添加日历和待办清单、喂食抚摸宠物、开始番茄钟、更换宠物。比如你说“我今天扫地了”或“查一下我的积分”。'
+      reply: '我可以做这些事：申报任务加分、查询积分和等级、设定/修改/删除日程提醒、添加/修改/删除日历和待办清单、喂食抚摸宠物、开始番茄钟、更换宠物。比如你说"我今天扫地了"、"查一下我的积分"或"删除周三的闹钟"。'
     }
   }
 
@@ -147,6 +167,44 @@ export function matchCorpus(text) {
   // 11) 申报加分 (需明确动词, 避免闲聊误命中)
   if (/(完成了|做完了|我做了|扫地|作业|帮忙|打扫|申报|申请加分|加分|值日|读书|运动|洗手|整理|背书|练琴|浇花|倒垃圾|表现好|做好事)/.test(t)) {
     return { action: 'apply_task', params: { task_name: extractTaskName(t) }, reply: '' }
+  }
+
+  // 12) 编辑 / 删除操作 (日程、日历、清单)
+  const isCalendar = /(日历|安排)/.test(t)
+  const isChecklist = /(待办|清单)/.test(t)
+  const isSchedule = /(日程|提醒|闹钟)/.test(t)
+
+  const editParts = extractEditParts(t)
+  if (editParts && (isCalendar || isChecklist || isSchedule)) {
+    const { oldClue, newClue } = editParts
+    if (isCalendar) {
+      return {
+        action: 'edit_calendar',
+        params: { old_title: oldClue, new_title: newClue, new_date: parseDate(newClue), new_time: parseTime(newClue) },
+        reply: '好的，我来修改日历安排。'
+      }
+    }
+    if (isChecklist) {
+      return {
+        action: 'edit_checklist',
+        params: { old_content: oldClue, new_content: newClue },
+        reply: '好的，我来修改待办。'
+      }
+    }
+    if (isSchedule) {
+      return {
+        action: 'edit_schedule',
+        params: { old_clue: oldClue, new_desc: newClue, new_time: parseTime(newClue), new_day: parseDay(newClue) },
+        reply: '好的，我来修改日程提醒。'
+      }
+    }
+  }
+
+  if (/删除|取消|去掉|移除/.test(t)) {
+    const keyword = extractKeyword(t)
+    if (isCalendar) return { action: 'delete_calendar', params: { title: keyword }, reply: '好的，我来删除这条日历安排。' }
+    if (isChecklist) return { action: 'delete_checklist', params: { content: keyword }, reply: '好的，我来删除这条待办。' }
+    if (isSchedule) return { action: 'delete_schedule', params: { clue: keyword, day: parseDay(t), time: parseTime(t) }, reply: '好的，我来删除这条日程提醒。' }
   }
 
   return null // 闲聊 -> 走大模型

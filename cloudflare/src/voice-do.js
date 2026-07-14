@@ -70,7 +70,34 @@ async function awardPoints(env, student, points, reason, category) {
   return stu ? calculateLevel(Math.max(0, stu.total_points)) : 1
 }
 
-// 语料命中时直接执行动作(不调大模型); chat 时 nlpResult 由 LLM 提供
+// 语音查找已有记录（编辑/删除用）
+async function findCalendar(db, studentId, title) {
+  if (!title) return null
+  const rows = await q.all(db, 'SELECT id, title, event_date, time_str FROM calendar_events WHERE student_id=?', studentId)
+  return rows.find(r => (r.title || '').includes(title) || title.includes(r.title || '')) || null
+}
+async function findChecklist(db, studentId, content) {
+  if (!content) return null
+  const rows = await q.all(db, 'SELECT id, content FROM checklist_items WHERE student_id=?', studentId)
+  return rows.find(r => (r.content || '').includes(content) || content.includes(r.content || '')) || null
+}
+async function findSchedule(db, studentId, clue, day, time) {
+  const rows = await q.all(db, 'SELECT id, day_of_week, time_str, task_desc FROM schedules WHERE student_id=?', studentId)
+  let best = null
+  let bestScore = 0
+  for (const r of rows) {
+    let score = 0
+    if (day && Number(r.day_of_week) === Number(day)) score += 2
+    if (time && (r.time_str || '').startsWith(time)) score += 2
+    if (clue) {
+      const d = (r.task_desc || '')
+      if (d.includes(clue) || clue.includes(d)) score += 1
+    }
+    if (score > bestScore) { bestScore = score; best = r }
+  }
+  return best
+}
+
 export async function applyIntent(env, student, nlpResult, now, rawText = '') {
   const db = env.DB
   const responseData = { action: nlpResult.action, text: '', reply_text: nlpResult.reply_text || '', params: {} }
@@ -176,6 +203,90 @@ export async function applyIntent(env, student, nlpResult, now, rawText = '') {
       const rows = await q.all(db, 'SELECT id, is_done FROM checklist_items WHERE student_id=?', student.id)
       const done = rows.filter(r => r.is_done).length
       responseData.reply_text = `你共有 ${rows.length} 项待办，已完成 ${done} 项。`
+    }
+
+  } else if (nlpResult.action === 'edit_schedule') {
+    const { old_clue, new_desc, new_time, new_day } = nlpResult
+    const match = await findSchedule(db, student.id, old_clue || new_desc, new_day, new_time)
+    if (!match) {
+      responseData.reply_text = '没找到对应的日程提醒，请再说清楚一点。'
+    } else {
+      const updates = []
+      const vals = []
+      if (new_day) { updates.push('day_of_week=?'); vals.push(new_day) }
+      if (new_time) { updates.push('time_str=?'); vals.push(new_time) }
+      if (new_desc) { updates.push('task_desc=?'); vals.push(new_desc.slice(0, 80)) }
+      if (updates.length) {
+        vals.push(match.id)
+        await q.run(db, `UPDATE schedules SET ${updates.join(', ')} WHERE id=?`, ...vals)
+        responseData.reply_text = nlpResult.reply_text || `已为您修改日程提醒。`
+      } else {
+        responseData.reply_text = '请告诉我要修改成什么时间或内容。'
+      }
+    }
+
+  } else if (nlpResult.action === 'delete_schedule') {
+    const { clue, day, time } = nlpResult
+    const match = await findSchedule(db, student.id, clue, day, time)
+    if (!match) {
+      responseData.reply_text = '没找到对应的日程提醒，请再说清楚一点。'
+    } else {
+      await q.run(db, 'DELETE FROM schedules WHERE id=?', match.id)
+      responseData.reply_text = nlpResult.reply_text || `已删除日程提醒：${match.task_desc}。`
+    }
+
+  } else if (nlpResult.action === 'edit_calendar') {
+    const { old_title, new_title, new_date, new_time } = nlpResult
+    const match = await findCalendar(db, student.id, old_title || new_title)
+    if (!match) {
+      responseData.reply_text = '没找到对应的日历安排。'
+    } else {
+      const updates = []
+      const vals = []
+      if (new_title) { updates.push('title=?'); vals.push(new_title.slice(0, 80)) }
+      if (new_date) { updates.push('event_date=?'); vals.push(new_date) }
+      if (new_time) { updates.push('time_str=?'); vals.push(new_time) }
+      if (updates.length) {
+        vals.push(match.id)
+        await q.run(db, `UPDATE calendar_events SET ${updates.join(', ')} WHERE id=?`, ...vals)
+        responseData.reply_text = nlpResult.reply_text || `已为您修改日历安排。`
+      } else {
+        responseData.reply_text = '请告诉我要修改成什么内容。'
+      }
+    }
+
+  } else if (nlpResult.action === 'delete_calendar') {
+    const title = (nlpResult.title || '').toString().trim()
+    const match = await findCalendar(db, student.id, title)
+    if (!match) {
+      responseData.reply_text = '没找到对应的日历安排。'
+    } else {
+      await q.run(db, 'DELETE FROM calendar_events WHERE id=?', match.id)
+      responseData.reply_text = nlpResult.reply_text || `已删除日历安排：${match.title}。`
+    }
+
+  } else if (nlpResult.action === 'edit_checklist') {
+    const { old_content, new_content } = nlpResult
+    const match = await findChecklist(db, student.id, old_content || new_content)
+    if (!match) {
+      responseData.reply_text = '没找到对应的待办。'
+    } else {
+      if (new_content) {
+        await q.run(db, 'UPDATE checklist_items SET content=? WHERE id=?', new_content.slice(0, 120), match.id)
+        responseData.reply_text = nlpResult.reply_text || `已修改待办为：${new_content}。`
+      } else {
+        responseData.reply_text = '请告诉我要修改成什么内容。'
+      }
+    }
+
+  } else if (nlpResult.action === 'delete_checklist') {
+    const content = (nlpResult.content || '').toString().trim()
+    const match = await findChecklist(db, student.id, content)
+    if (!match) {
+      responseData.reply_text = '没找到对应的待办。'
+    } else {
+      await q.run(db, 'DELETE FROM checklist_items WHERE id=?', match.id)
+      responseData.reply_text = nlpResult.reply_text || `已删除待办：${match.content}。`
     }
 
   } else {

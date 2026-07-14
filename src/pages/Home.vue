@@ -25,7 +25,6 @@ import RulesModal from '@/components/modals/RulesModal.vue'
 import LogoModal from '@/components/modals/LogoModal.vue'
 import SystemModal from '@/components/modals/SystemModal.vue'
 import ChatLogsModal from '@/components/modals/ChatLogsModal.vue'
-import SchedulesModal from '@/components/modals/SchedulesModal.vue'
 import StudentDetailPanel from '@/components/modals/StudentDetailPanel.vue'
 import WebVoiceChat from '@/components/modals/WebVoiceChat.vue'
 import { useRealtime } from '@/composables/useRealtime'
@@ -71,7 +70,6 @@ const showRulesModal = ref(false)
 const showLogoModal = ref(false)
 const showSystemModal = ref(false)
 const showChatLogsModal = ref(false)
-const showSchedulesModal = ref(false)
 const showDetailPanel = ref(false)
 const showAuthModal = ref(false)
 
@@ -85,9 +83,6 @@ watch(() => classStore.currentClass, () => {
 })
 
 // ===== 监听：日程/聊天模态框跟随 store 状态 =====
-watch(() => systemStore.schedulingStudent, (val) => {
-  showSchedulesModal.value = !!val
-})
 watch(() => systemStore.auditingStudent, (val) => {
   showChatLogsModal.value = !!val
 })
@@ -199,11 +194,7 @@ function handleChangePet(student: Student) {
   showPetModal.value = true
 }
 
-// 关闭日程/聊天时清理 store
-function closeSchedulesModal() {
-  showSchedulesModal.value = false
-  systemStore.schedulingStudent = null
-}
+// 关闭聊天时清理 store
 function closeChatLogsModal() {
   showChatLogsModal.value = false
   systemStore.auditingStudent = null
@@ -336,8 +327,6 @@ onMounted(async () => {
     <SystemModal :show="showSystemModal" @close="showSystemModal = false" />
     <StudentDetailPanel :show="showDetailPanel" @close="studentStore.closeDetailPanel()" @edit-student="handleEditStudent" @change-pet="handleChangePet" />
     <ChatLogsModal :show="showChatLogsModal" @close="closeChatLogsModal" />
-    <SchedulesModal :show="showSchedulesModal" @close="closeSchedulesModal" />
-
     <!-- 确认对话框 -->
     <ConfirmDialog
       :show="confirmDialog.show"

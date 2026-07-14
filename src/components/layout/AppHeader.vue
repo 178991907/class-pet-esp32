@@ -43,6 +43,7 @@ const showStudentMenu = ref(false)
 const showEvalMenu = ref(false)
 const showPetMenu = ref(false)
 const showSortMenu = ref(false)
+const showSettingsMenu = ref(false)
 
 function toggleSortMenu() {
   showSortMenu.value = !showSortMenu.value
@@ -168,12 +169,19 @@ function handleLogout() {
             <button v-if="currentRole !== 'student' && !isGuest" @click="emit('batchEval')" class="w-full text-left px-3 py-2 text-sm hover:bg-gradient-to-r hover:from-orange-50 hover:to-pink-50 transition-colors">✅ 批量评价</button>
             <button @click="emit('showRank')" class="w-full text-left px-3 py-2 text-sm hover:bg-gradient-to-r hover:from-orange-50 hover:to-pink-50 transition-colors">🏆 班级排行</button>
             <button @click="emit('showRecords')" class="w-full text-left px-3 py-2 text-sm hover:bg-gradient-to-r hover:from-orange-50 hover:to-pink-50 transition-colors">📋 历史记录</button>
-            <template v-if="currentRole !== 'student' && !isGuest">
-              <hr class="my-1.5 border-gray-100">
-              <button @click="emit('showRules')" class="w-full text-left px-3 py-2 text-sm hover:bg-gradient-to-r hover:from-orange-50 hover:to-pink-50 transition-colors">⚙️ 规则设置</button>
-              <button v-if="currentRole === 'admin'" @click="router.push('/devices')" class="w-full text-left px-3 py-2 text-sm hover:bg-gradient-to-r hover:from-orange-50 hover:to-pink-50 transition-colors">📟 设备管理</button>
-              <button v-if="currentRole === 'admin'" @click="emit('showSystem')" class="w-full text-left px-3 py-2 text-sm hover:bg-gradient-to-r hover:from-orange-50 hover:to-pink-50 transition-colors text-orange-600 font-medium">🛠️ 设备与系统管理</button>
-            </template>
+          </div>
+        </Transition>
+      </div>
+
+      <!-- Settings Menu -->
+      <div class="relative" v-if="!studentStore.batchMode && currentRole !== 'student' && !isGuest">
+        <button @click="showSettingsMenu = !showSettingsMenu" class="px-3 py-1.5 rounded-lg text-sm bg-white/95 hover:bg-white shadow-md transition-all font-medium">⚙️ 设置管理 ▾</button>
+        <div v-if="showSettingsMenu" @click="showSettingsMenu = false" class="fixed inset-0 z-40"></div>
+        <Transition name="dropdown">
+          <div v-if="showSettingsMenu" class="absolute right-0 top-full mt-1.5 bg-white rounded-xl shadow-xl border border-gray-100 py-1.5 w-44 z-50 overflow-hidden text-left">
+            <button @click="emit('showRules')" class="w-full text-left px-3 py-2 text-sm hover:bg-gradient-to-r hover:from-orange-50 hover:to-pink-50 transition-colors">📝 规则设置</button>
+            <button v-if="currentRole === 'admin'" @click="router.push('/devices')" class="w-full text-left px-3 py-2 text-sm hover:bg-gradient-to-r hover:from-orange-50 hover:to-pink-50 transition-colors">📟 设备管理</button>
+            <button v-if="currentRole === 'admin'" @click="emit('showSystem')" class="w-full text-left px-3 py-2 text-sm hover:bg-gradient-to-r hover:from-orange-50 hover:to-pink-50 transition-colors text-orange-600 font-medium">🛠️ 设备与系统管理</button>
           </div>
         </Transition>
       </div>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuth } from '@/composables/useAuth'
 import { useStudentStore } from '@/stores/useStudentStore'
@@ -19,7 +19,11 @@ const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '�
 
 // ===== 标签 =====
 type TabKey = 'calendar' | 'checklist' | 'alarm' | 'memory'
+const allowedTabs = new Set<TabKey>(['calendar', 'checklist', 'alarm', 'memory'])
 const activeTab = ref<TabKey>('calendar')
+watch(() => route.query.tab as string, (t) => {
+  if (t && allowedTabs.has(t as TabKey)) activeTab.value = t as TabKey
+}, { immediate: true })
 const tabs: { key: TabKey; label: string; icon: string }[] = [
   { key: 'calendar', label: '日历', icon: '📅' },
   { key: 'checklist', label: '清单', icon: '✅' },

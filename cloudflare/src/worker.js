@@ -578,8 +578,8 @@ async function handleApi(request, env, ctx) {
       const deviceId = getDeviceId(request)
       const sid = await deviceToStudent(deviceId)
       if (!sid) return json({ status: 'unbound', schedules: [] })
-      await runAsync('UPDATE students SET last_seen=? WHERE id=?', Date.now(), stu.id)
-      const schedules = await allAsync('SELECT id, day_of_week, time_str, task_desc, is_active FROM schedules WHERE student_id=? AND is_active=1', stu.id)
+      await runAsync('UPDATE students SET last_seen=? WHERE id=?', Date.now(), sid)
+      const schedules = await allAsync('SELECT id, day_of_week, time_str, task_desc, is_active FROM schedules WHERE student_id=? AND is_active=1', sid)
       return json({ status: 'ok', schedules })
     }
     if (path === '/device/settings' && method === 'GET') {
@@ -640,6 +640,23 @@ async function handleApi(request, env, ctx) {
     }
     if ((m = path.match(/^\/device\/schedules\/([^/]+)$/)) && method === 'DELETE') {
       await runAsync('DELETE FROM schedules WHERE id=?', m[1])
+      return json({ success: true })
+    }
+    if ((m = path.match(/^\/device\/schedules\/([^/]+)$/)) && method === 'PUT') {
+      const deviceId = getDeviceId(request)
+      const sid = await studentIdByDevice(deviceId)
+      if (!sid) return json({ status: 'unbound', error: '未绑定' }, 400)
+      const exists = await getAsync('SELECT id FROM schedules WHERE id=? AND student_id=?', m[1], sid)
+      if (!exists) return json({ error: '日程不存在' }, 404)
+      const b = await readBody(request)
+      const updates = []
+      const vals = []
+      if (b.day_of_week !== undefined) { updates.push('day_of_week=?'); vals.push(Number(b.day_of_week)) }
+      if (b.time_str !== undefined) { updates.push('time_str=?'); vals.push(String(b.time_str).slice(0, 5)) }
+      if (b.task_desc !== undefined) { updates.push('task_desc=?'); vals.push(String(b.task_desc).slice(0, 80)) }
+      if (!updates.length) return json({ error: '无有效字段' }, 400)
+      vals.push(m[1])
+      await runAsync(`UPDATE schedules SET ${updates.join(', ')} WHERE id=?`, ...vals)
       return json({ success: true })
     }
     if ((m = path.match(/^\/device\/chat-logs\/student\/([^/]+)$/)) && method === 'GET') {
@@ -801,6 +818,22 @@ async function handleApi(request, env, ctx) {
       await runAsync('DELETE FROM calendar_events WHERE id=? AND student_id=?', m[1], sid)
       return json({ success: true })
     }
+    if ((m = path.match(/^\/device\/calendar\/([^/]+)$/)) && method === 'PUT') {
+      const deviceId = getDeviceId(request)
+      const sid = await studentIdByDevice(deviceId)
+      if (!sid) return json({ status: 'unbound', error: '未绑定' }, 400)
+      const b = await readBody(request)
+      const updates = []
+      const vals = []
+      if (b.title !== undefined) { updates.push('title=?'); vals.push(String(b.title).slice(0, 80)) }
+      if (b.event_date !== undefined) { updates.push('event_date=?'); vals.push(String(b.event_date).slice(0, 10)) }
+      if (b.time_str !== undefined) { updates.push('time_str=?'); vals.push(b.time_str ? String(b.time_str).slice(0, 5) : null) }
+      if (b.description !== undefined) { updates.push('description=?'); vals.push(String(b.description).slice(0, 200)) }
+      if (!updates.length) return json({ error: '无有效字段' }, 400)
+      vals.push(m[1], sid)
+      await runAsync(`UPDATE calendar_events SET ${updates.join(', ')} WHERE id=? AND student_id=?`, ...vals)
+      return json({ success: true })
+    }
 
     // ---- 设备端: 清单 ----
     if (path === '/device/checklist' && method === 'GET') {
@@ -826,8 +859,13 @@ async function handleApi(request, env, ctx) {
       const sid = await studentIdByDevice(deviceId)
       if (!sid) return json({ status: 'unbound', error: '未绑定' }, 400)
       const b = await readBody(request)
-      const done = b.is_done ? 1 : 0
-      await runAsync('UPDATE checklist_items SET is_done=? WHERE id=? AND student_id=?', done, m[1], sid)
+      const updates = []
+      const vals = []
+      if (b.content !== undefined) { updates.push('content=?'); vals.push(String(b.content).slice(0, 120)) }
+      if (b.is_done !== undefined) { updates.push('is_done=?'); vals.push(b.is_done ? 1 : 0) }
+      if (!updates.length) return json({ error: '无有效字段' }, 400)
+      vals.push(m[1], sid)
+      await runAsync(`UPDATE checklist_items SET ${updates.join(', ')} WHERE id=? AND student_id=?`, ...vals)
       return json({ success: true })
     }
     if ((m = path.match(/^\/device\/checklist\/([^/]+)$/)) && method === 'DELETE') {
@@ -858,7 +896,7 @@ async function handleApi(request, env, ctx) {
       if (!sid) return json({ status: 'unbound', error: '未绑定' }, 400)
       const b = await readBody(request)
       const now = Date.now()
-      let p = await getOwnerProfile(db, sid)
+      let p = await getOwnerProfile(env.DB, sid)
       if (!p) {
         p = { profile_json: null, emotion_log: '[]', learning_log: '[]' }
         await runAsync('INSERT INTO owner_profiles (student_id, profile_json, emotion_log, learning_log, updated_at) VALUES (?,?,?,?,?)', sid, null, '[]', '[]', now)
@@ -948,7 +986,7 @@ async function handleApi(request, env, ctx) {
       const uid = await requireUser(request, env)
       const stu = await getAsync('SELECT s.id FROM students s JOIN classes c ON s.class_id=c.id WHERE s.id=? AND c.user_id=?', m[1], uid)
       if (!stu) return json({ error: '无权限' }, 403)
-      const p = await getOwnerProfile(db, m[1])
+      const p = await getOwnerProfile(env.DB, m[1])
       let profile = null, emotion_log = [], learning_log = []
       if (p) {
         try { profile = p.profile_json ? JSON.parse(p.profile_json) : null } catch {}
@@ -963,7 +1001,7 @@ async function handleApi(request, env, ctx) {
       if (!stu) return json({ error: '无权限' }, 403)
       const b = await readBody(request)
       const now = Date.now()
-      let p = await getOwnerProfile(db, m[1])
+      let p = await getOwnerProfile(env.DB, m[1])
       if (!p) {
         await runAsync('INSERT INTO owner_profiles (student_id, profile_json, emotion_log, learning_log, updated_at) VALUES (?,?,?,?,?)', m[1], null, '[]', '[]', now)
         p = { profile_json: null, emotion_log: '[]', learning_log: '[]' }
