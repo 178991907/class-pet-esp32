@@ -10,7 +10,7 @@ export interface PetType {
   levelImages?: Record<number, string>
 }
 
-const BASE_URL = import.meta.env.BASE_URL || '/pet-garden/'
+const BASE_URL = import.meta.env.BASE_URL || '/'
 
 // 生成等级图片路径的辅助函数
 function generateLevelImages(petId: string): Record<number, string> {
