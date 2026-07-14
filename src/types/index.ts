@@ -101,7 +101,8 @@ export interface ChecklistItem {
 export interface Schedule {
   id: string
   student_id?: string
-  day_of_week: number       // 0=周日 ... 6=周六
+  day_of_week?: number       // 0=周日 ... 6=周六（legacy，兼容旧记录）
+  days_of_week?: number      // 位掩码：bit 0=周日，bit 1=周一，…，bit 6=周六
   time_str: string          // HH:MM
   task_desc: string
   is_active?: number        // 0 | 1

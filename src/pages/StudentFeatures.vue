@@ -16,6 +16,18 @@ const studentId = computed(() => route.params.id as string)
 const student = computed(() => studentStore.students.find(s => s.id === studentId.value))
 
 const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+const WEEKDAY_SHORT = ['日', '一', '二', '三', '四', '五', '六']
+const PRESETS = [
+  { label: '每天', mask: 0b1111111 },
+  { label: '工作日', mask: 0b0111110 },
+  { label: '周末', mask: 0b1000001 }
+]
+
+function daysFromMask(mask: number) {
+  const list: number[] = []
+  for (let i = 0; i < 7; i++) if (mask & (1 << i)) list.push(i)
+  return list
+}
 
 // ===== 标签 =====
 type TabKey = 'calendar' | 'checklist' | 'alarm' | 'memory'
@@ -46,7 +58,7 @@ const listAdding = ref(false)
 
 // ===== 闹铃 =====
 const alarms = ref<Schedule[]>([])
-const alarmForm = ref({ day_of_week: 1, time_str: '08:00', task_desc: '' })
+const alarmForm = ref({ days_of_week: 0b0111110, time_str: '08:00', task_desc: '' })
 const alarmAdding = ref(false)
 
 // ===== 主人记忆 =====
@@ -67,7 +79,10 @@ async function loadAll() {
     ])
     calendar.value = calRes.data.events || calRes.data.calendar || []
     checklist.value = listRes.data.items || listRes.data.checklist || []
-    alarms.value = alarmRes.data.schedules || alarmRes.data.items || []
+    alarms.value = (alarmRes.data.schedules || alarmRes.data.items || []).map((a: Schedule) => ({
+      ...a,
+      days_of_week: a.days_of_week || (a.day_of_week !== undefined ? (1 << a.day_of_week) : 0)
+    }))
     memory.value = {
       profile: memRes.data.profile || null,
       emotion_log: memRes.data.emotion_log || [],
@@ -155,19 +170,19 @@ async function delChecklist(id: string) {
 
 // ===== 闹铃操作 =====
 async function addAlarm() {
-  if (!alarmForm.value.time_str || !alarmForm.value.task_desc) {
-    toast.error('请填写时间和任务')
+  if (!alarmForm.value.days_of_week || !alarmForm.value.time_str || !alarmForm.value.task_desc) {
+    toast.error('请选择星期并填写时间和任务')
     return
   }
   alarmAdding.value = true
   try {
     await api.post(`/device/schedules/student/${studentId.value}`, {
-      day_of_week: Number(alarmForm.value.day_of_week),
+      days_of_week: alarmForm.value.days_of_week,
       time_str: alarmForm.value.time_str,
       task_desc: alarmForm.value.task_desc
     })
     toast.success('已添加闹铃')
-    alarmForm.value = { day_of_week: 1, time_str: '08:00', task_desc: '' }
+    alarmForm.value = { days_of_week: 0b0111110, time_str: '08:00', task_desc: '' }
     await loadAll()
   } catch (e: any) {
     toast.error('添加失败：' + (e?.response?.data?.error || e.message))
@@ -321,21 +336,47 @@ onMounted(loadAll)
       <section v-else-if="activeTab === 'alarm'" class="space-y-4">
         <div class="bg-white rounded-2xl shadow p-4 space-y-3">
           <div class="font-bold text-gray-700 flex items-center gap-2">➕ 添加定时闹铃</div>
-          <div class="flex gap-2">
-            <select v-model.number="alarmForm.day_of_week" class="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300">
-              <option v-for="(w, i) in WEEKDAYS" :key="i" :value="i">{{ w }}</option>
-            </select>
-            <input v-model="alarmForm.time_str" type="time" class="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
+          <!-- 快捷预设 -->
+          <div class="flex gap-2 flex-wrap">
+            <button
+              v-for="p in PRESETS" :key="p.label"
+              @click="alarmForm.days_of_week = p.mask"
+              :class="alarmForm.days_of_week === p.mask ? 'bg-orange-500 text-white' : 'bg-orange-50 text-orange-600 hover:bg-orange-100'"
+              class="px-3 py-1 rounded-full text-xs font-medium transition-colors"
+            >{{ p.label }}</button>
           </div>
-          <input v-model="alarmForm.task_desc" placeholder="提醒内容（如：该练琴啦）" class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
+          <!-- 星期多选 -->
+          <div class="flex gap-1.5 justify-between">
+            <button
+              v-for="(_, i) in WEEKDAYS" :key="i"
+              @click="alarmForm.days_of_week ^= (1 << i)"
+              :class="(alarmForm.days_of_week & (1 << i)) ? 'bg-gradient-to-r from-orange-400 to-pink-500 text-white shadow' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'"
+              class="flex-1 py-2 rounded-xl text-xs font-bold transition-all"
+            >{{ WEEKDAY_SHORT[i] }}</button>
+          </div>
+          <div class="flex gap-2">
+            <input v-model="alarmForm.time_str" type="time" class="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
+          </div>
+          <input v-model="alarmForm.task_desc" placeholder="提醒内容（如：起床、练琴、交作业）" class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
           <button @click="addAlarm" :disabled="alarmAdding" class="w-full bg-gradient-to-r from-orange-400 to-pink-500 text-white font-bold py-2.5 rounded-xl hover:shadow-lg transition-all disabled:opacity-50">添加</button>
         </div>
         <div v-if="alarms.length === 0" class="text-center text-gray-400 py-10">还没有定时闹铃</div>
-        <div v-for="a in alarms" :key="a.id" class="bg-white rounded-2xl shadow p-4 flex items-center gap-3">
-          <div class="text-2xl">⏰</div>
-          <div class="flex-1">
-            <div class="font-bold text-gray-800">{{ WEEKDAYS[a.day_of_week] }} {{ a.time_str }}</div>
-            <div class="text-sm text-gray-500">{{ a.task_desc }}</div>
+        <div
+          v-for="a in alarms" :key="a.id"
+          class="bg-white rounded-2xl shadow p-4 flex items-center gap-4"
+        >
+          <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-orange-400 to-pink-500 flex flex-col items-center justify-center text-white shadow">
+            <div class="text-[10px] opacity-90">⏰</div>
+            <div class="text-lg font-bold leading-none">{{ a.time_str }}</div>
+          </div>
+          <div class="flex-1 min-w-0">
+            <div class="font-bold text-gray-800">{{ a.task_desc }}</div>
+            <div class="flex flex-wrap gap-1 mt-1.5">
+              <span
+                v-for="d in daysFromMask(a.days_of_week || 0)" :key="d"
+                class="px-2 py-0.5 rounded-full bg-orange-50 text-orange-600 text-xs font-medium"
+              >周{{ WEEKDAY_SHORT[d] }}</span>
+            </div>
           </div>
           <button @click="delAlarm(a.id)" class="text-red-400 hover:text-red-600 text-sm px-2">删除</button>
         </div>

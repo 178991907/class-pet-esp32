@@ -4,6 +4,16 @@ import { localDb } from './localDb'
 // 模拟延迟（ms）以使体验更真实
 const MOCK_DELAY = 100
 
+// 辅助函数：从位掩码中取出最低位的星期索引（0=周日），用于兼容旧 day_of_week 字段
+function firstDayOfMask(mask: number) {
+  const m = Number(mask) || 0
+  if (!m) return 0
+  for (let i = 0; i < 7; i++) {
+    if (m & (1 << i)) return i
+  }
+  return 0
+}
+
 // 辅助函数：解析 URL 查询参数
 function parseQueryParams(url: string): Record<string, string> {
   const params: Record<string, string> = {}
@@ -569,14 +579,20 @@ export async function localApiAdapter(config: AxiosRequestConfig): Promise<Axios
     if (m) {
       const sid = m[1]
       if (method === 'get') {
-        return createMockResponse(config, 200, { success: true, schedules: lsGet(`cp_schedules_${sid}`, []) })
+        const schedules = lsGet(`cp_schedules_${sid}`, []).map((s: any) => ({
+          ...s,
+          days_of_week: s.days_of_week || (s.day_of_week !== undefined ? (1 << s.day_of_week) : 0)
+        }))
+        return createMockResponse(config, 200, { success: true, schedules })
       }
       if (method === 'post') {
-        if (!body.day_of_week || !body.time_str || !body.task_desc) return createMockResponse(config, 400, { error: '参数缺失' })
+        const daysMask = Number(body.days_of_week ?? 0)
+        if ((!daysMask && !body.day_of_week) || !body.time_str || !body.task_desc) return createMockResponse(config, 400, { error: '参数缺失' })
         const s = {
           id: genId(),
           student_id: sid,
-          day_of_week: Number(body.day_of_week),
+          day_of_week: daysMask ? firstDayOfMask(daysMask) : Number(body.day_of_week),
+          days_of_week: daysMask,
           time_str: String(body.time_str).slice(0, 5),
           task_desc: String(body.task_desc).slice(0, 120),
           is_active: 1,

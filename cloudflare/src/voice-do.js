@@ -82,12 +82,13 @@ async function findChecklist(db, studentId, content) {
   return rows.find(r => (r.content || '').includes(content) || content.includes(r.content || '')) || null
 }
 async function findSchedule(db, studentId, clue, day, time) {
-  const rows = await q.all(db, 'SELECT id, day_of_week, time_str, task_desc FROM schedules WHERE student_id=?', studentId)
+  const rows = await q.all(db, 'SELECT id, days_of_week, time_str, task_desc FROM schedules WHERE student_id=?', studentId)
   let best = null
   let bestScore = 0
   for (const r of rows) {
     let score = 0
-    if (day && Number(r.day_of_week) === Number(day)) score += 2
+    const daysMask = Number(r.days_of_week || 0)
+    if (day && (daysMask & (1 << Number(day)))) score += 2
     if (time && (r.time_str || '').startsWith(time)) score += 2
     if (clue) {
       const d = (r.task_desc || '')
@@ -130,11 +131,12 @@ export async function applyIntent(env, student, nlpResult, now, rawText = '') {
 
   } else if (nlpResult.action === 'create_schedule') {
     const info = nlpResult.schedule_info || { days: nlpResult.days, time: nlpResult.time, task_desc: nlpResult.task_desc }
-    if (info && Array.isArray(info.days) && info.time && info.task_desc) {
-      for (const day of info.days) {
-        await q.run(db, 'INSERT INTO schedules (id, student_id, day_of_week, time_str, task_desc, is_active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)', uuid(), student.id, day, info.time, info.task_desc, now)
-      }
-      responseData.reply_text = nlpResult.reply_text || `已为您安排在周${info.days.join('、')}的 ${info.time} 提醒：${info.task_desc}。`
+    if (info && Array.isArray(info.days) && info.days.length && info.time && info.task_desc) {
+      const daysMask = info.days.reduce((mask, d) => mask | (1 << Number(d)), 0)
+      const firstDay = info.days.find(d => true) || 0
+      await q.run(db, 'INSERT INTO schedules (id, student_id, day_of_week, days_of_week, time_str, task_desc, is_active, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)', uuid(), student.id, firstDay, daysMask, info.time, info.task_desc, now)
+      const dayNames = info.days.map(d => '日一二三四五六'[Number(d)]).join('、')
+      responseData.reply_text = nlpResult.reply_text || `已为您安排在周${dayNames}的 ${info.time} 提醒：${info.task_desc}。`
     } else {
       responseData.reply_text = '抱歉，我未能听清您要设定的日程时间和任务，请重试。'
     }
@@ -213,7 +215,11 @@ export async function applyIntent(env, student, nlpResult, now, rawText = '') {
     } else {
       const updates = []
       const vals = []
-      if (new_day) { updates.push('day_of_week=?'); vals.push(new_day) }
+      if (new_day) {
+        const newMask = 1 << Number(new_day)
+        updates.push('day_of_week=?', 'days_of_week=?')
+        vals.push(Number(new_day), newMask)
+      }
       if (new_time) { updates.push('time_str=?'); vals.push(new_time) }
       if (new_desc) { updates.push('task_desc=?'); vals.push(new_desc.slice(0, 80)) }
       if (updates.length) {

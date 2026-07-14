@@ -36,6 +36,15 @@ function getLevelProgress(exp) {
 function uuid() {
   return crypto.randomUUID()
 }
+// 从位掩码中取出最低位的星期索引（0=周日），用于兼容旧 day_of_week 字段
+function firstDayOfMask(mask) {
+  const m = Number(mask) || 0
+  if (!m) return 0
+  for (let i = 0; i < 7; i++) {
+    if (m & (1 << i)) return i
+  }
+  return 0
+}
 function normalize(pathname) {
   let p = pathname
   if (p.startsWith('/pet-garden')) p = p.slice('/pet-garden'.length)
@@ -579,7 +588,7 @@ async function handleApi(request, env, ctx) {
       const sid = await deviceToStudent(deviceId)
       if (!sid) return json({ status: 'unbound', schedules: [] })
       await runAsync('UPDATE students SET last_seen=? WHERE id=?', Date.now(), sid)
-      const schedules = await allAsync('SELECT id, day_of_week, time_str, task_desc, is_active FROM schedules WHERE student_id=? AND is_active=1', sid)
+      const schedules = await allAsync('SELECT id, days_of_week, time_str, task_desc, is_active FROM schedules WHERE student_id=? AND is_active=1', sid)
       return json({ status: 'ok', schedules })
     }
     if (path === '/device/settings' && method === 'GET') {
@@ -628,14 +637,15 @@ async function handleApi(request, env, ctx) {
       return json({ success: true })
     }
     if ((m = path.match(/^\/device\/schedules\/student\/([^/]+)$/)) && method === 'GET') {
-      const schedules = await allAsync('SELECT * FROM schedules WHERE student_id=? ORDER BY day_of_week ASC, time_str ASC', m[1])
+      const schedules = await allAsync('SELECT * FROM schedules WHERE student_id=? ORDER BY time_str ASC', m[1])
       return json({ success: true, schedules })
     }
     if ((m = path.match(/^\/device\/schedules\/student\/([^/]+)$/)) && method === 'POST') {
       const b = await readBody(request)
-      if (!b.day_of_week || !b.time_str || !b.task_desc) return json({ error: '参数缺失' }, 400)
+      const daysMask = Number(b.days_of_week ?? 0)
+      if (!daysMask || !b.time_str || !b.task_desc) return json({ error: '参数缺失' }, 400)
       const id = uuid()
-      await runAsync('INSERT INTO schedules (id, student_id, day_of_week, time_str, task_desc, is_active, created_at) VALUES (?,?,?,?,?,1,?)', id, m[1], b.day_of_week, b.time_str, b.task_desc, Date.now())
+      await runAsync('INSERT INTO schedules (id, student_id, day_of_week, days_of_week, time_str, task_desc, is_active, created_at) VALUES (?,?,?,?,?,1,?)', id, m[1], firstDayOfMask(daysMask), daysMask, b.time_str, b.task_desc, Date.now())
       return json({ success: true, id })
     }
     if ((m = path.match(/^\/device\/schedules\/([^/]+)$/)) && method === 'DELETE') {
@@ -651,7 +661,12 @@ async function handleApi(request, env, ctx) {
       const b = await readBody(request)
       const updates = []
       const vals = []
-      if (b.day_of_week !== undefined) { updates.push('day_of_week=?'); vals.push(Number(b.day_of_week)) }
+      if (b.days_of_week !== undefined) {
+        const daysMask = Number(b.days_of_week)
+        if (!daysMask) return json({ error: 'days_of_week 不能为 0' }, 400)
+        updates.push('day_of_week=?', 'days_of_week=?')
+        vals.push(firstDayOfMask(daysMask), daysMask)
+      }
       if (b.time_str !== undefined) { updates.push('time_str=?'); vals.push(String(b.time_str).slice(0, 5)) }
       if (b.task_desc !== undefined) { updates.push('task_desc=?'); vals.push(String(b.task_desc).slice(0, 80)) }
       if (!updates.length) return json({ error: '无有效字段' }, 400)
