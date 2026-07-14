@@ -34,13 +34,15 @@ const isManager = computed(() => currentRole.value === 'teacher' || currentRole.
 
 function goFeatures() {
   if (!studentStore.detailStudent) return
+  const id = studentStore.detailStudent.id
   studentStore.closeDetailPanel()
-  router.push(`/student/${studentStore.detailStudent.id}/features`)
+  router.push(`/student/${id}/features`)
 }
 function goSettings() {
   if (!studentStore.detailStudent) return
+  const id = studentStore.detailStudent.id
   studentStore.closeDetailPanel()
-  router.push(`/student/${studentStore.detailStudent.id}/settings`)
+  router.push(`/student/${id}/settings`)
 }
 
 function getStudentPetImage(student: Student): string {
