@@ -1,5 +1,6 @@
 // Workers AI 封装 + 语音合成代理
-// ASR 用 Workers AI Whisper(keyless)；LLM 用 Workers AI Llama(中文)；TTS 复用 keyless 的 Google TTS 代理(设备直接拉 MP3)。
+// ASR 默认 Workers AI Whisper(keyless), 可按设备切换 groq/openai/openrouter/baidu(见 transcribe 的 provider 路由);
+// LLM 用 Workers AI Llama(中文)；TTS 复用 keyless 的 Google TTS 代理(设备直接拉 MP3)。
 
 const WHISPER_MODEL = '@cf/openai/whisper'
 // 全部走 Workers AI 免费额度(10k neurons/天)。
@@ -63,7 +64,9 @@ export function pcmToWav(pcmChunks, totalBytes, sampleRate = 16000, numChannels 
 
 // ============ ASR ============
 
-export async function transcribe(env, pcmChunks, totalBytes) {
+export async function transcribe(env, pcmChunks, totalBytes, opts = {}) {
+  const provider = (opts && opts.provider) || 'workers-ai'
+  const keys = (opts && opts.keys) || {}
   // 兼容两种输入:
   //  - Route B(WS 流式): 设备上行裸 PCM 帧 -> 需 pcmToWav 封装
   //  - Route A(HTTP 回退): 设备直接上传 .wav 文件 -> 已是合法 WAV, 不可再封装(否则双重封装导致 Whisper 解析失败)
@@ -93,8 +96,137 @@ export async function transcribe(env, pcmChunks, totalBytes) {
   //   - { audio: number[] }  (每个元素是 0-255 的原始音频字节, 非 base64 字符串!)
   // 早期写成 { audio: base64String } 会被校验拒绝 (报 'array' not in 'string'), 导致 ASR 永远失败。
   const audioBytes = Array.from(new Uint8Array(wav))
-  const result = await env.AI.run(WHISPER_MODEL, { audio: audioBytes })
-  return (result && result.text) || ''
+
+  let text = ''
+  try {
+    switch (provider) {
+      case 'groq':
+        text = await groqTranscribe(keys, wav)
+        break
+      case 'openai':
+        text = await openaiTranscribe(keys, wav)
+        break
+      case 'openrouter':
+        text = await openrouterTranscribe(keys, wav)
+        break
+      case 'baidu':
+        text = await baiduTranscribe(keys, wav)
+        break
+      case 'workers-ai':
+      default: {
+        const result = await env.AI.run(WHISPER_MODEL, { audio: audioBytes })
+        text = (result && result.text) || ''
+      }
+    }
+  } catch (e) {
+    console.error(`❌ [ASR:${provider}] 失败:`, e && (e.stack || e.message) || e)
+    // 非默认引擎失败时, 自动回退 Workers AI(免费兜底), 保证语音不中断
+    if (provider !== 'workers-ai') {
+      console.warn('↩️ [ASR] 回退 Workers AI')
+      try {
+        const r2 = await env.AI.run(WHISPER_MODEL, { audio: audioBytes })
+        text = (r2 && r2.text) || ''
+      } catch (e2) {
+        console.error('❌ [ASR fallback] Workers AI 也失败:', e2 && (e2.stack || e2.message))
+        throw e
+      }
+    } else {
+      throw e
+    }
+  }
+  return text
+}
+
+// ===== Groq Whisper (免费, 极速) =====
+async function groqTranscribe(keys, wav) {
+  const key = keys.groq_api_key
+  if (!key) throw new Error('缺少 groq_api_key (请在系统后台配置)')
+  const form = new FormData()
+  form.append('file', new Blob([wav], { type: 'audio/wav' }), 'audio.wav')
+  form.append('model', 'whisper-large-v3')
+  const r = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}` },
+    body: form
+  })
+  if (!r.ok) {
+    const t = await r.text().catch(() => '')
+    throw new Error(`Groq ${r.status}: ${t.slice(0, 200)}`)
+  }
+  const j = await r.json().catch(() => ({}))
+  return (j.text || '').trim()
+}
+
+// ===== OpenAI Whisper (付费, 需 key) =====
+async function openaiTranscribe(keys, wav) {
+  const key = keys.openai_api_key
+  if (!key) throw new Error('缺少 openai_api_key (请在系统后台配置)')
+  const form = new FormData()
+  form.append('file', new Blob([wav], { type: 'audio/wav' }), 'audio.wav')
+  form.append('model', 'whisper-1')
+  const r = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}` },
+    body: form
+  })
+  if (!r.ok) {
+    const t = await r.text().catch(() => '')
+    throw new Error(`OpenAI ${r.status}: ${t.slice(0, 200)}`)
+  }
+  const j = await r.json().catch(() => ({}))
+  return (j.text || '').trim()
+}
+
+// ===== OpenRouter (兼容 OpenAI audio API, 需余额) =====
+async function openrouterTranscribe(keys, wav) {
+  const key = keys.openrouter_api_key
+  if (!key) throw new Error('缺少 openrouter_api_key (请在系统后台配置)')
+  const model = keys.openrouter_model || 'openai/whisper-1'
+  const form = new FormData()
+  form.append('file', new Blob([wav], { type: 'audio/wav' }), 'audio.wav')
+  form.append('model', model)
+  const r = await fetch('https://openrouter.ai/api/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}` },
+    body: form
+  })
+  if (!r.ok) {
+    const t = await r.text().catch(() => '')
+    throw new Error(`OpenRouter ${r.status}: ${t.slice(0, 200)}`)
+  }
+  const j = await r.json().catch(() => ({}))
+  return (j.text || '').trim()
+}
+
+// ===== 百度短语音 ASR (中文免费, 月 5 万次) =====
+async function baiduTranscribe(keys, wav) {
+  const ak = keys.baidu_api_key
+  const sk = keys.baidu_secret_key
+  if (!ak || !sk) throw new Error('缺少 baidu_api_key / baidu_secret_key (请在系统后台配置)')
+  // 1) 获取 access_token
+  const tkResp = await fetch(
+    `https://aip.baidubce.com/oauth/2.0/token?grant_type=client_credentials&client_id=${encodeURIComponent(ak)}&client_secret=${encodeURIComponent(sk)}`
+  )
+  const tk = await tkResp.json().catch(() => ({}))
+  if (!tk.access_token) throw new Error(`百度 token 获取失败: ${tk.error_description || tk.error || ''}`)
+  // 2) 语音识别
+  const speech = arrayBufferToBase64(wav)
+  const r = await fetch('https://vop.baidu.com/server_api', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      format: 'wav',
+      rate: 16000,
+      channel: 1,
+      cuid: 'classpet-device',
+      token: tk.access_token,
+      speech,
+      len: wav.byteLength
+    })
+  })
+  const j = await r.json().catch(() => ({}))
+  if (j.err_no !== 0) throw new Error(`百度识别失败 err ${j.err_no}: ${j.err_msg || ''}`)
+  return (j.result && j.result[0]) || ''
 }
 
 // ============ LLM (意图分类) ============

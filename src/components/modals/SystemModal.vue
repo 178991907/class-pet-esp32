@@ -210,6 +210,12 @@ async function handleUpdateAdminPassword() {
                             建议切换到 "Groq Whisper" (免费) 或 "百度短语音" (免费)。
                           </p>
                         </div>
+                        <div v-if="systemStore.asrProvider === 'openai'" class="mt-3">
+                          <span class="text-xs text-gray-400 block mb-1.5">OpenAI API Key</span>
+                          <input v-model="systemStore.openaiApiKey" type="password" placeholder="sk-..."
+                            class="w-full border-2 border-gray-200 rounded-xl px-4 py-2 text-sm focus:outline-none focus:border-orange-400 transition-colors" />
+                          <p class="text-xs text-gray-400 mt-1 font-medium">OpenAI Whisper-1 语音转写，按用量计费。在 platform.openai.com 创建 API Key 后填入即可。</p>
+                        </div>
                       </div>
                     </div>
                   </div>

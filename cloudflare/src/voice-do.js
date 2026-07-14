@@ -4,7 +4,7 @@
 //   DO->设备: hello / stt / llm / tts{url}
 // 链路: Workers AI Whisper 识别 -> Workers AI Llama 意图 -> 落地意图 -> Google TTS 代理下发 MP3 URL。
 
-import { q } from './db.js'
+import { q, getDeviceSettings, readAsrKeys } from './db.js'
 import { getOwnerProfile, ownerProfileToContext } from './db.js'
 import { transcribe, classifyIntent, regexClassifyIntent, fetchTtsMp3 } from './ai.js'
 import { matchCorpus } from './intents.js'
@@ -288,10 +288,13 @@ export class VoiceDO {
       return
     }
 
-    // ASR
+    // ASR (按设备 provider 路由, device 覆盖 + 全局回退)
     let text = ''
     try {
-      text = await transcribe(env, audioChunks, audioBytes)
+      const ds = await getDeviceSettings(deviceId, ['asr_provider'], env.DB)
+      const provider = ds.asr_provider || 'workers-ai'
+      const keys = await readAsrKeys(env.DB, provider)
+      text = await transcribe(env, audioChunks, audioBytes, { provider, keys })
     } catch (e) {
       console.error('❌ [DO] ASR 失败:', e.message)
       server.send(JSON.stringify({ type: 'llm', text: '抱歉，刚才没听清，请再说一遍。', action: 'none' }))

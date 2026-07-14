@@ -2,7 +2,7 @@
 // 承担: REST API + /ws/voice(转交 Durable Object) + SSE 实时事件 + /device/* 设备端点
 // 数据库: D1 (SQLite 兼容) · AI: Workers AI (keyless) · 资产: R2(可选)
 
-import { bindDb, q, getAsync, allAsync, runAsync, getSetting, setSetting, getDeviceSettings, setDeviceSetting, getOwnerProfile, ownerProfileToContext } from './db.js'
+import { bindDb, q, getAsync, allAsync, runAsync, getSetting, setSetting, getDeviceSettings, setDeviceSetting, readAsrKeys, getOwnerProfile, ownerProfileToContext } from './db.js'
 import { setSecrets, hashPassword, verifyPassword, generateToken, verifyToken, getUserIdFromAuth } from './auth.js'
 import { fetchTtsMp3, petChat } from './ai.js'
 import { VoiceDO, applyIntent } from './voice-do.js'
@@ -165,7 +165,11 @@ async function runVoicePipeline(env, deviceId, pcmChunks, pcmBytes, prefext) {
   let text = prefext || ''
   if (pcmChunks) {
     try {
-      text = await transcribe(env, pcmChunks, pcmBytes)
+      // 按设备配置选择 ASR provider (device 覆盖 + 全局回退)
+      const ds = await getDeviceSettings(deviceId, ['asr_provider'])
+      const provider = ds.asr_provider || 'workers-ai'
+      const keys = await readAsrKeys(env.DB, provider)
+      text = await transcribe(env, pcmChunks, pcmBytes, { provider, keys })
     } catch (e) {
       console.error('❌ [ASR] transcribe 失败:', e && (e.stack || e.message) || e)
       return { action: 'none', text: '听不清楚', reply_text: '抱歉，刚才没听清，请再说一遍。' }
@@ -725,14 +729,14 @@ async function handleApi(request, env, ctx) {
 
     // ===== SYSTEM SETTINGS (全局平台配置) =====
     if (path === '/system/settings' && method === 'GET') {
-      const keys = ['task_confirm_mode', 'task_confirm_delay', 'openrouter_api_key', 'openrouter_model', 'groq_api_key', 'baidu_api_key', 'baidu_secret_key', 'asr_provider', 'firmware_latest_version', 'firmware_download_url', 'firmware_checksum']
+      const keys = ['task_confirm_mode', 'task_confirm_delay', 'openrouter_api_key', 'openrouter_model', 'groq_api_key', 'openai_api_key', 'baidu_api_key', 'baidu_secret_key', 'asr_provider', 'firmware_latest_version', 'firmware_download_url', 'firmware_checksum']
       const out = {}
       for (const k of keys) out[k] = await getSetting(k)
       return json(out)
     }
     if (path === '/system/settings' && method === 'POST') {
       const b = await readBody(request)
-      const allowed = ['task_confirm_mode', 'task_confirm_delay', 'openrouter_api_key', 'openrouter_model', 'groq_api_key', 'baidu_api_key', 'baidu_secret_key', 'asr_provider', 'firmware_latest_version', 'firmware_download_url', 'firmware_checksum']
+      const allowed = ['task_confirm_mode', 'task_confirm_delay', 'openrouter_api_key', 'openrouter_model', 'groq_api_key', 'openai_api_key', 'baidu_api_key', 'baidu_secret_key', 'asr_provider', 'firmware_latest_version', 'firmware_download_url', 'firmware_checksum']
       for (const [k, v] of Object.entries(b)) {
         if (allowed.includes(k)) await setSetting(k, v)
       }

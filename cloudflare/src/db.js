@@ -61,20 +61,48 @@ export async function setSetting(key, value) {
 
 // ============ 设备级配置 (方案 B) ============
 // 优先读 device_settings, 回退全局 settings
-export async function getDeviceSettings(deviceId, keys) {
+// db 可选: 传入则用显式 db(Durable Object 内模块级 DB 为 null, 必须传入 env.DB); 不传则用模块级 DB(worker 主路由)
+export async function getDeviceSettings(deviceId, keys, db = null) {
   const out = {}
   for (const k of keys) {
     let v = null
     if (deviceId) {
-      const row = await getAsync('SELECT value FROM device_settings WHERE device_id = ? AND key = ?', deviceId, k)
+      let row
+      if (db) row = await q.get(db, 'SELECT value FROM device_settings WHERE device_id = ? AND key = ?', deviceId, k)
+      else row = await getAsync('SELECT value FROM device_settings WHERE device_id = ? AND key = ?', deviceId, k)
       if (row) {
         try { v = JSON.parse(row.value) } catch { v = row.value }
       }
     }
-    if (v === null) v = await getSetting(k)
+    if (v === null) {
+      if (db) {
+        const r2 = await q.get(db, 'SELECT value FROM settings WHERE key = ?', k)
+        v = r2 ? safeParse(r2.value) : null
+      } else v = await getSetting(k)
+    }
     out[k] = v
   }
   return out
+}
+
+// ASR provider 所需要的平台级 API key (存于全局 settings 表)。按 provider 只读取所需字段。
+export async function readAsrKeys(db, provider) {
+  const need = new Set()
+  if (provider === 'groq') need.add('groq_api_key')
+  else if (provider === 'openai') need.add('openai_api_key')
+  else if (provider === 'openrouter') { need.add('openrouter_api_key'); need.add('openrouter_model') }
+  else if (provider === 'baidu') { need.add('baidu_api_key'); need.add('baidu_secret_key') }
+  const keys = {}
+  for (const k of need) {
+    const row = await q.get(db, 'SELECT value FROM settings WHERE key = ?', k)
+    keys[k] = row ? safeParse(row.value) : ''
+  }
+  return keys
+}
+
+function safeParse(s) {
+  if (s === null || s === undefined) return null
+  try { return JSON.parse(s) } catch { return s }
 }
 
 export async function setDeviceSetting(deviceId, key, value) {

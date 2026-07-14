@@ -17,6 +17,7 @@ export const useSystemStore = defineStore('system', () => {
   const asrProvider = ref('workers-ai')
   const baiduApiKey = ref('')
   const baiduSecretKey = ref('')
+  const openaiApiKey = ref('')
 
   // 用户权限管理
   const usersList = ref<any[]>([])
@@ -47,6 +48,7 @@ export const useSystemStore = defineStore('system', () => {
       baiduApiKey.value = settingsRes.data.baidu_api_key || ''
       baiduSecretKey.value = settingsRes.data.baidu_secret_key || ''
       groqApiKey.value = settingsRes.data.groq_api_key || ''
+      openaiApiKey.value = settingsRes.data.openai_api_key || ''
     } catch (err) {
       console.error('加载系统配置失败:', err)
     }
@@ -82,7 +84,8 @@ export const useSystemStore = defineStore('system', () => {
         asr_provider: asrProvider.value,
         baidu_api_key: baiduApiKey.value,
         baidu_secret_key: baiduSecretKey.value,
-        groq_api_key: groqApiKey.value
+        groq_api_key: groqApiKey.value,
+        openai_api_key: openaiApiKey.value
       })
       toast.success('系统设置保存成功！')
     } catch (err) {
@@ -219,6 +222,7 @@ export const useSystemStore = defineStore('system', () => {
     asrProvider,
     baiduApiKey,
     baiduSecretKey,
+    openaiApiKey,
     // 用户管理
     usersList,
     loadingUsers,
