@@ -2,7 +2,7 @@
 // 承担: REST API + /ws/voice(转交 Durable Object) + SSE 实时事件 + /device/* 设备端点
 // 数据库: D1 (SQLite 兼容) · AI: Workers AI (keyless) · 资产: R2(可选)
 
-import { bindDb, q, getAsync, allAsync, runAsync, getSetting, setSetting, getOwnerProfile, ownerProfileToContext } from './db.js'
+import { bindDb, q, getAsync, allAsync, runAsync, getSetting, setSetting, getDeviceSettings, setDeviceSetting, getOwnerProfile, ownerProfileToContext } from './db.js'
 import { setSecrets, hashPassword, verifyPassword, generateToken, verifyToken, getUserIdFromAuth } from './auth.js'
 import { fetchTtsMp3, petChat } from './ai.js'
 import { VoiceDO, applyIntent } from './voice-do.js'
@@ -52,6 +52,31 @@ function json(data, status = 200, headers = {}) {
 function getDeviceId(request) {
   const url = new URL(request.url)
   return request.headers.get('x-device-id') || url.searchParams.get('device_id') || ''
+}
+
+// 方案 B: 通过 devices 表做"设备 -> 学生"解析 (学生与设备解耦)
+async function deviceToStudent(deviceId) {
+  if (!deviceId) return null
+  const dev = await getAsync('SELECT student_id FROM devices WHERE UPPER(device_id) = UPPER(?)', deviceId)
+  return dev ? dev.student_id : null
+}
+
+// 绑定/解绑设备 (维护 devices 表与 students.device_id 镜像)
+async function bindDevice(deviceId, studentId, classId) {
+  if (!deviceId) return
+  await runAsync(
+    `INSERT INTO devices (device_id, student_id, class_id, created_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(device_id) DO UPDATE SET student_id = excluded.student_id, class_id = COALESCE(excluded.class_id, class_id)`,
+    deviceId, studentId, classId, Date.now()
+  )
+  await runAsync('UPDATE students SET device_id = ? WHERE id = ?', deviceId, studentId)
+}
+async function unbindDeviceByStudent(studentId) {
+  const stu = await getAsync('SELECT device_id FROM students WHERE id = ?', studentId)
+  if (stu && stu.device_id) {
+    await runAsync('UPDATE devices SET student_id = NULL WHERE UPPER(device_id) = UPPER(?)', stu.device_id)
+  }
+  await runAsync('UPDATE students SET device_id = NULL WHERE id = ?', studentId)
 }
 async function requireUser(request, env) {
   const token = getUserIdFromAuth(request)
@@ -316,6 +341,7 @@ async function handleApi(request, env, ctx) {
       const id = uuid()
       const now = Date.now()
       await runAsync('INSERT INTO students (id, class_id, name, student_no, device_id, total_points, pet_level, pet_exp, created_at) VALUES (?,?,?,?,?,0,1,0,?)', id, b.classId, b.name, b.studentNo || null, b.deviceId || null, now)
+      if (b.deviceId) await bindDevice(b.deviceId, id, b.classId)
       return json({ id, class_id: b.classId, name: b.name, student_no: b.studentNo || null, device_id: b.deviceId || null, total_points: 0, pet_level: 1, pet_exp: 0, created_at: now }, 201)
     }
     if ((m = path.match(/^\/students\/([^/]+)\/pet$/)) && method === 'PUT') {
@@ -332,13 +358,19 @@ async function handleApi(request, env, ctx) {
       const b = await readBody(request)
       const stu = await getAsync('SELECT s.* FROM students s JOIN classes c ON s.class_id=c.id WHERE s.id=? AND c.user_id=?', m[1], uid)
       if (!stu) return json({ error: '学生不存在' }, 404)
-      await runAsync('UPDATE students SET name=?, student_no=?, device_id=? WHERE id=?', b.name, b.studentNo || null, b.deviceId || null, m[1])
+      const newDev = b.deviceId || null
+      if ((stu.device_id || null) !== newDev) {
+        if (stu.device_id) await runAsync('UPDATE devices SET student_id=NULL WHERE UPPER(device_id)=UPPER(?)', stu.device_id)
+        if (newDev) await bindDevice(newDev, m[1], stu.class_id)
+      }
+      await runAsync('UPDATE students SET name=?, student_no=?, device_id=? WHERE id=?', b.name, b.studentNo || null, newDev, m[1])
       return json({ success: true })
     }
     if ((m = path.match(/^\/students\/([^/]+)$/)) && method === 'DELETE') {
       const uid = await requireUser(request, env)
       const stu = await getAsync('SELECT s.* FROM students s JOIN classes c ON s.class_id=c.id WHERE s.id=? AND c.user_id=?', m[1], uid)
       if (!stu) return json({ error: '学生不存在' }, 404)
+      await unbindDeviceByStudent(m[1])
       await runAsync('DELETE FROM evaluation_records WHERE student_id=?', m[1])
       await runAsync('DELETE FROM students WHERE id=?', m[1])
       return json({ success: true })
@@ -483,10 +515,27 @@ async function handleApi(request, env, ctx) {
     // ===== DEVICE =====
     if (path === '/device/status' && method === 'GET') {
       const deviceId = getDeviceId(request)
-      const stu = await getAsync('SELECT s.*, c.name as class_name FROM students s JOIN classes c ON s.class_id=c.id WHERE UPPER(s.device_id)=UPPER(?)', deviceId)
-      if (!stu) return json({ status: 'unbound', message: '该硬件设备尚未与任何学生绑定', device_id: deviceId })
+      const dev = deviceId ? await getAsync('SELECT * FROM devices WHERE UPPER(device_id)=UPPER(?)', deviceId) : null
+      if (!dev) return json({ status: 'unbound', message: '该硬件设备尚未注册', device_id: deviceId })
+      const deviceInfo = {
+        device_id: dev.device_id,
+        name: dev.name,
+        battery_level: dev.battery_level,
+        is_charging: dev.is_charging,
+        last_seen: dev.last_seen,
+        firmware_version: dev.firmware_version
+      }
+      if (!dev.student_id) {
+        return json({ status: 'unbound', message: '该设备尚未绑定学生', device_id: deviceId, device: deviceInfo })
+      }
+      const stu = await getAsync('SELECT s.*, c.name as class_name FROM students s JOIN classes c ON s.class_id=c.id WHERE s.id=?', dev.student_id)
+      if (!stu) return json({ status: 'unbound', message: '绑定的学生不存在', device_id: deviceId, device: deviceInfo })
       const lp = getLevelProgress(stu.pet_exp)
-      return json({ status: 'ok', student: { id: stu.id, name: stu.name, class_name: stu.class_name, total_points: stu.total_points, pet_type: stu.pet_type, pet_level: stu.pet_level, pet_exp: stu.pet_exp, exp_progress: lp.current, exp_required: lp.required, is_max_level: lp.isMaxLevel } })
+      return json({
+        status: 'ok',
+        student: { id: stu.id, name: stu.name, class_name: stu.class_name, total_points: stu.total_points, pet_type: stu.pet_type, pet_level: stu.pet_level, pet_exp: stu.pet_exp, exp_progress: lp.current, exp_required: lp.required, is_max_level: lp.isMaxLevel },
+        device: deviceInfo
+      })
     }
     if (path === '/device/voice' && method === 'POST') {
       return json(await handleDeviceVoice(request, env))
@@ -507,32 +556,43 @@ async function handleApi(request, env, ctx) {
     if (path === '/device/heartbeat' && method === 'POST') {
       const deviceId = getDeviceId(request)
       const b = await readBody(request)
-      const stu = await getAsync('SELECT id FROM students WHERE UPPER(device_id)=UPPER(?)', deviceId)
-      if (!stu) return json({ status: 'unbound', error: '未找到绑定学生' })
-      await runAsync('UPDATE students SET battery_level=?, is_charging=?, last_seen=? WHERE id=?', b.battery_level ?? 100, b.is_charging ? 1 : 0, Date.now(), stu.id)
+      if (!deviceId) return json({ status: 'unbound', error: '缺少设备标识' })
+      let dev = await getAsync('SELECT * FROM devices WHERE UPPER(device_id)=UPPER(?)', deviceId)
+      if (!dev) {
+        // 自动登记未注册设备 (处于未绑定状态)
+        await runAsync('INSERT INTO devices (device_id, name, battery_level, is_charging, last_seen, created_at) VALUES (?,?,?,?,?,?)', deviceId, deviceId, b.battery_level ?? 100, b.is_charging ? 1 : 0, Date.now(), Date.now())
+        dev = { device_id: deviceId, student_id: null }
+      }
+      await runAsync('UPDATE devices SET battery_level=?, is_charging=?, last_seen=? WHERE UPPER(device_id)=UPPER(?)', b.battery_level ?? 100, b.is_charging ? 1 : 0, Date.now(), deviceId)
+      // 镜像电量到绑定的学生(供学生卡片展示)
+      if (dev.student_id) {
+        await runAsync('UPDATE students SET battery_level=?, is_charging=?, last_seen=? WHERE id=?', b.battery_level ?? 100, b.is_charging ? 1 : 0, Date.now(), dev.student_id)
+      }
       return json({ success: true, timestamp: Date.now() })
     }
     if (path === '/device/schedules' && method === 'GET') {
       const deviceId = getDeviceId(request)
-      const stu = await getAsync('SELECT id FROM students WHERE UPPER(device_id)=UPPER(?)', deviceId)
-      if (!stu) return json({ status: 'unbound', schedules: [] })
+      const sid = await deviceToStudent(deviceId)
+      if (!sid) return json({ status: 'unbound', schedules: [] })
       await runAsync('UPDATE students SET last_seen=? WHERE id=?', Date.now(), stu.id)
       const schedules = await allAsync('SELECT id, day_of_week, time_str, task_desc, is_active FROM schedules WHERE student_id=? AND is_active=1', stu.id)
       return json({ status: 'ok', schedules })
     }
     if (path === '/device/settings' && method === 'GET') {
-      const keys = ['task_confirm_mode', 'task_confirm_delay', 'asr_provider', 'screen_brightness', 'screen_sleep_seconds']
-      const out = {}
-      for (const k of keys) out[k] = await getSetting(k)
+      const deviceId = getDeviceId(request) || params.get('device_id') || ''
+      const keys = ['screen_brightness', 'screen_sleep_seconds', 'asr_provider']
+      const out = await getDeviceSettings(deviceId, keys)
       return json(out)
     }
     if (path === '/device/settings' && method === 'POST') {
+      const deviceId = getDeviceId(request) || params.get('device_id') || ''
       const b = await readBody(request)
-      for (const [k, v] of Object.entries(b)) await setSetting(k, v)
+      for (const [k, v] of Object.entries(b)) {
+        if (['screen_brightness', 'screen_sleep_seconds', 'asr_provider'].includes(k)) {
+          await setDeviceSetting(deviceId, k, v)
+        }
+      }
       return json({ success: true })
-    }
-    if (path === '/device/unbound-devices' && method === 'GET') {
-      return json({ success: true, devices: [] })
     }
     if (path === '/device/tasks' && method === 'GET') {
       const uid = await requireUser(request, env)
@@ -590,29 +650,125 @@ async function handleApi(request, env, ctx) {
       return new Response('font not found', { status: 404 })
     }
 
+    // ===== DEVICES (设备独立管理, 方案 B) =====
+    if (path === '/devices' && method === 'GET') {
+      const uid = await requireUser(request, env)
+      const rows = await allAsync(`SELECT d.*, s.name as student_name, c.name as class_name
+        FROM devices d LEFT JOIN students s ON d.student_id=s.id LEFT JOIN classes c ON d.class_id=c.id
+        WHERE (c.user_id=? OR d.class_id IS NULL OR d.student_id IS NULL)
+        ORDER BY d.last_seen DESC`, uid)
+      return json({ success: true, devices: rows })
+    }
+    if (path === '/devices/register' && method === 'POST') {
+      const uid = await requireUser(request, env)
+      const b = await readBody(request)
+      const deviceId = (b.device_id || '').trim()
+      if (!deviceId) return json({ error: '缺少 device_id' }, 400)
+      let classId = b.class_id || null
+      if (classId) {
+        const cls = await getAsync('SELECT user_id FROM classes WHERE id=?', classId)
+        if (!cls || cls.user_id !== uid) return json({ error: '无权绑定该班级' }, 403)
+      }
+      await runAsync(`INSERT INTO devices (device_id, name, class_id, created_at) VALUES (?,?,?,?)
+        ON CONFLICT(device_id) DO UPDATE SET name=COALESCE(excluded.name, name), class_id=COALESCE(excluded.class_id, class_id)`,
+        deviceId, b.name || deviceId, classId, Date.now())
+      return json({ success: true, device_id: deviceId })
+    }
+    if (path === '/devices/unbound' && method === 'GET') {
+      const uid = await requireUser(request, env)
+      const rows = await allAsync(`SELECT d.device_id, d.name, d.last_seen, d.battery_level, d.is_charging, d.firmware_version
+        FROM devices d LEFT JOIN classes c ON d.class_id=c.id
+        WHERE d.student_id IS NULL AND (c.user_id=? OR d.class_id IS NULL)
+        ORDER BY d.last_seen DESC`, uid)
+      return json({ success: true, devices: rows })
+    }
+    if ((m = path.match(/^\/devices\/([^/]+)$/)) && method === 'GET') {
+      const uid = await requireUser(request, env)
+      const dev = await getAsync('SELECT d.*, s.name as student_name, c.name as class_name FROM devices d LEFT JOIN students s ON d.student_id=s.id LEFT JOIN classes c ON d.class_id=c.id WHERE UPPER(d.device_id)=UPPER(?)', m[1])
+      if (!dev) return json({ error: '设备不存在' }, 404)
+      const settings = await getDeviceSettings(m[1], ['screen_brightness', 'screen_sleep_seconds', 'asr_provider'])
+      return json({ success: true, device: dev, settings })
+    }
+    if ((m = path.match(/^\/devices\/([^/]+)$/)) && method === 'PUT') {
+      const uid = await requireUser(request, env)
+      const b = await readBody(request)
+      const dev = await getAsync('SELECT * FROM devices WHERE UPPER(device_id)=UPPER(?)', m[1])
+      if (!dev) return json({ error: '设备不存在' }, 404)
+      if (dev.class_id) {
+        const cls = await getAsync('SELECT user_id FROM classes WHERE id=?', dev.class_id)
+        if (cls && cls.user_id !== uid) return json({ error: '无权操作该设备' }, 403)
+      }
+      let studentId = b.student_id === undefined ? dev.student_id : (b.student_id || null)
+      if (studentId) {
+        const stu = await getAsync('SELECT s.* FROM students s JOIN classes c ON s.class_id=c.id WHERE s.id=? AND c.user_id=?', studentId, uid)
+        if (!stu) return json({ error: '学生不存在或无权' }, 404)
+        await runAsync('UPDATE devices SET student_id=NULL WHERE student_id=?', studentId) // 该学生原有设备解绑
+      }
+      await runAsync('UPDATE devices SET student_id=?, name=COALESCE(?, name), class_id=COALESCE(?, class_id) WHERE UPPER(device_id)=UPPER(?)',
+        studentId, b.name || null, b.class_id || null, m[1])
+      if (studentId) await runAsync('UPDATE students SET device_id=? WHERE id=?', m[1], studentId)
+      else await runAsync('UPDATE students SET device_id=NULL WHERE device_id=?', m[1])
+      return json({ success: true })
+    }
+    if ((m = path.match(/^\/devices\/([^/]+)$/)) && method === 'DELETE') {
+      const uid = await requireUser(request, env)
+      const dev = await getAsync('SELECT * FROM devices WHERE UPPER(device_id)=UPPER(?)', m[1])
+      if (!dev) return json({ error: '设备不存在' }, 404)
+      if (dev.class_id) {
+        const cls = await getAsync('SELECT user_id FROM classes WHERE id=?', dev.class_id)
+        if (cls && cls.user_id !== uid) return json({ error: '无权操作该设备' }, 403)
+      }
+      await runAsync('UPDATE students SET device_id=NULL WHERE device_id=?', m[1])
+      await runAsync('DELETE FROM devices WHERE UPPER(device_id)=UPPER(?)', m[1])
+      return json({ success: true })
+    }
+
+    // ===== SYSTEM SETTINGS (全局平台配置) =====
+    if (path === '/system/settings' && method === 'GET') {
+      const keys = ['task_confirm_mode', 'task_confirm_delay', 'openrouter_api_key', 'openrouter_model', 'groq_api_key', 'baidu_api_key', 'baidu_secret_key', 'asr_provider', 'firmware_latest_version', 'firmware_download_url', 'firmware_checksum']
+      const out = {}
+      for (const k of keys) out[k] = await getSetting(k)
+      return json(out)
+    }
+    if (path === '/system/settings' && method === 'POST') {
+      const b = await readBody(request)
+      const allowed = ['task_confirm_mode', 'task_confirm_delay', 'openrouter_api_key', 'openrouter_model', 'groq_api_key', 'baidu_api_key', 'baidu_secret_key', 'asr_provider', 'firmware_latest_version', 'firmware_download_url', 'firmware_checksum']
+      for (const [k, v] of Object.entries(b)) {
+        if (allowed.includes(k)) await setSetting(k, v)
+      }
+      return json({ success: true })
+    }
+
     // ===== BACKUP / RESTORE =====
     if (path === '/backup' && method === 'GET') {
-      const [classes, students, evaluations, settings] = await Promise.all([
+      const [classes, students, evaluations, settings, devices, deviceSettings] = await Promise.all([
         allAsync('SELECT * FROM classes'),
         allAsync('SELECT * FROM students'),
         allAsync('SELECT * FROM evaluation_records'),
-        allAsync('SELECT * FROM settings')
+        allAsync('SELECT * FROM settings'),
+        allAsync('SELECT * FROM devices'),
+        allAsync('SELECT * FROM device_settings')
       ])
-      return json({ classes, students, evaluations, settings })
+      return json({ classes, students, evaluations, settings, devices, device_settings: deviceSettings })
     }
     if (path === '/restore' && method === 'POST') {
       const b = await readBody(request)
       if (!b || !b.classes) return json({ error: '无效备份' }, 400)
       for (const c of b.classes) await runAsync('INSERT OR REPLACE INTO classes (id, user_id, name, created_at, updated_at) VALUES (?,?,?,?,?)', c.id, c.user_id, c.name, c.created_at, c.updated_at)
       for (const s of b.students) await runAsync('INSERT OR REPLACE INTO students (id, class_id, name, student_no, total_points, pet_type, pet_level, pet_exp, device_id, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)', s.id, s.class_id, s.name, s.student_no, s.total_points, s.pet_type, s.pet_level, s.pet_exp, s.device_id, s.created_at)
+      if (Array.isArray(b.devices)) {
+        for (const d of b.devices) await runAsync('INSERT OR REPLACE INTO devices (device_id, name, student_id, class_id, firmware_version, pet_type, pet_level, battery_level, is_charging, last_seen, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)', d.device_id, d.name, d.student_id, d.class_id, d.firmware_version, d.pet_type, d.pet_level, d.battery_level, d.is_charging, d.last_seen, d.created_at)
+      }
+      if (Array.isArray(b.device_settings)) {
+        for (const ds of b.device_settings) await runAsync('INSERT OR REPLACE INTO device_settings (device_id, key, value, updated_at) VALUES (?,?,?,?)', ds.device_id, ds.key, ds.value, ds.updated_at)
+      }
       return json({ success: true })
     }
 
     // ===== 宠物主人记忆(设备 + 网页通用) =====
-    // 通过 device_id 解析 student_id 的辅助
+    // 通过 device_id 解析 student_id 的辅助 (方案 B: 经 devices 表)
     async function studentIdByDevice(deviceId) {
-      const stu = await getAsync('SELECT id FROM students WHERE UPPER(device_id)=UPPER(?)', deviceId)
-      return stu ? stu.id : null
+      return await deviceToStudent(deviceId)
     }
 
     // ---- 设备端: 日历 ----

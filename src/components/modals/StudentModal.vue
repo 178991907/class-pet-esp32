@@ -86,9 +86,9 @@ async function handleSubmit() {
             <span>📡</span> 发现最近开机的未绑定设备:
           </span>
           <div class="flex flex-col gap-2">
-            <div v-for="dev in studentStore.unboundDevicesList" :key="dev.deviceId" class="flex justify-between items-center bg-white p-2.5 rounded-xl border border-orange-200/45 shadow-sm">
-              <span class="font-mono text-gray-700 font-bold select-all text-xs">{{ dev.deviceId }}</span>
-              <button @click="newStudentDeviceId = dev.deviceId" class="text-orange-600 hover:text-orange-700 font-bold px-2.5 py-1 bg-orange-100/50 rounded-lg transition-colors">一键绑定</button>
+            <div v-for="dev in studentStore.unboundDevicesList" :key="dev.device_id" class="flex justify-between items-center bg-white p-2.5 rounded-xl border border-orange-200/45 shadow-sm">
+              <span class="font-mono text-gray-700 font-bold select-all text-xs">{{ dev.device_id }}</span>
+              <button @click="newStudentDeviceId = dev.device_id" class="text-orange-600 hover:text-orange-700 font-bold px-2.5 py-1 bg-orange-100/50 rounded-lg transition-colors">一键绑定</button>
             </div>
           </div>
           <p class="text-[10px] text-gray-400 mt-2">提示：开发板开机连上 Wi-Fi 时会自动在此列出，点击一键绑定即可，免去手动输入。</p>

@@ -7,16 +7,14 @@ export const useSystemStore = defineStore('system', () => {
   const { api } = useAuth()
   const toast = useToast()
 
-  // 系统配置
+  // 系统配置 (全局平台设置)
   const pendingTasks = ref<any[]>([])
   const taskConfirmMode = ref('auto')
   const taskConfirmDelay = ref(30)
   const openrouterApiKey = ref('')
   const openrouterModel = ref('openrouter/free')
   const groqApiKey = ref('')
-  const screenBrightness = ref(80)
-  const screenSleepSeconds = ref(15)
-  const asrProvider = ref('openrouter')
+  const asrProvider = ref('workers-ai')
   const baiduApiKey = ref('')
   const baiduSecretKey = ref('')
 
@@ -40,14 +38,12 @@ export const useSystemStore = defineStore('system', () => {
       const tasksRes = await api.get('/device/tasks?status=pending')
       pendingTasks.value = tasksRes.data.tasks
 
-      const settingsRes = await api.get('/device/settings')
+      const settingsRes = await api.get('/system/settings')
       taskConfirmMode.value = settingsRes.data.task_confirm_mode
       taskConfirmDelay.value = settingsRes.data.task_confirm_delay
       openrouterApiKey.value = settingsRes.data.openrouter_api_key || ''
       openrouterModel.value = settingsRes.data.openrouter_model || 'openrouter/free'
-      screenBrightness.value = settingsRes.data.screen_brightness ?? 80
-      screenSleepSeconds.value = settingsRes.data.screen_sleep_seconds ?? 15
-      asrProvider.value = settingsRes.data.asr_provider || 'groq'
+      asrProvider.value = settingsRes.data.asr_provider || 'workers-ai'
       baiduApiKey.value = settingsRes.data.baidu_api_key || ''
       baiduSecretKey.value = settingsRes.data.baidu_secret_key || ''
       groqApiKey.value = settingsRes.data.groq_api_key || ''
@@ -78,13 +74,11 @@ export const useSystemStore = defineStore('system', () => {
 
   async function saveSystemSettings() {
     try {
-      await api.post('/device/settings', {
+      await api.post('/system/settings', {
         task_confirm_mode: taskConfirmMode.value,
         task_confirm_delay: Number(taskConfirmDelay.value),
         openrouter_api_key: openrouterApiKey.value,
         openrouter_model: openrouterModel.value,
-        screen_brightness: Number(screenBrightness.value),
-        screen_sleep_seconds: Number(screenSleepSeconds.value),
         asr_provider: asrProvider.value,
         baidu_api_key: baiduApiKey.value,
         baidu_secret_key: baiduSecretKey.value,
@@ -222,8 +216,6 @@ export const useSystemStore = defineStore('system', () => {
     openrouterApiKey,
     openrouterModel,
     groqApiKey,
-    screenBrightness,
-    screenSleepSeconds,
     asrProvider,
     baiduApiKey,
     baiduSecretKey,

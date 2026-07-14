@@ -108,6 +108,23 @@ export interface Schedule {
   created_at?: number
 }
 
+// 设备 (方案 B: 设备独立实体)
+export interface Device {
+  device_id: string
+  name?: string | null
+  student_id?: string | null
+  student_name?: string | null
+  class_id?: string | null
+  class_name?: string | null
+  firmware_version?: string | null
+  pet_type?: string | null
+  pet_level?: number
+  battery_level?: number
+  is_charging?: number
+  last_seen?: number | null
+  created_at?: number
+}
+
 // 宠物主人记忆
 export interface OwnerEmotionEntry {
   ts: number

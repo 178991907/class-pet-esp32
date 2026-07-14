@@ -280,7 +280,7 @@ export class VoiceDO {
 
     const student = await q.get(
       db,
-      `SELECT s.*, c.user_id FROM students s JOIN classes c ON s.class_id = c.id WHERE UPPER(s.device_id) = UPPER(?)`,
+      `SELECT s.*, c.user_id FROM students s JOIN classes c ON s.class_id = c.id JOIN devices d ON d.student_id = s.id WHERE UPPER(d.device_id) = UPPER(?)`,
       deviceId
     )
     if (!student) {

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { useRouter } from 'vue-router'
 import { useClassStore } from '@/stores/useClassStore'
 import { useStudentStore } from '@/stores/useStudentStore'
 import { useAuth } from '@/composables/useAuth'
@@ -21,6 +22,7 @@ const emit = defineEmits<{
   showAuth: []
 }>()
 
+const router = useRouter()
 const classStore = useClassStore()
 const studentStore = useStudentStore()
 const { isGuest, username, logout, user } = useAuth()
@@ -169,6 +171,7 @@ function handleLogout() {
             <template v-if="currentRole !== 'student' && !isGuest">
               <hr class="my-1.5 border-gray-100">
               <button @click="emit('showRules')" class="w-full text-left px-3 py-2 text-sm hover:bg-gradient-to-r hover:from-orange-50 hover:to-pink-50 transition-colors">⚙️ 规则设置</button>
+              <button v-if="currentRole === 'admin'" @click="router.push('/devices')" class="w-full text-left px-3 py-2 text-sm hover:bg-gradient-to-r hover:from-orange-50 hover:to-pink-50 transition-colors">📟 设备管理</button>
               <button v-if="currentRole === 'admin'" @click="emit('showSystem')" class="w-full text-left px-3 py-2 text-sm hover:bg-gradient-to-r hover:from-orange-50 hover:to-pink-50 transition-colors text-orange-600 font-medium">🛠️ 设备与系统管理</button>
             </template>
           </div>

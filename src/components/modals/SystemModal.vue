@@ -213,34 +213,7 @@ async function handleUpdateAdminPassword() {
                       </div>
                     </div>
                   </div>
-                  <!-- 屏幕设置 -->
-                  <div class="border-t border-gray-100 pt-6">
-                    <label class="block text-gray-700 font-bold mb-2.5">屏幕背光与待机设置</label>
-                    <div class="flex flex-col gap-4">
-                      <div>
-                        <div class="flex justify-between items-center mb-1.5">
-                          <span class="text-xs text-gray-400 block font-bold">屏幕亮度 (Backlight)</span>
-                          <span class="text-xs text-orange-500 font-bold">{{ systemStore.screenBrightness }}%</span>
-                        </div>
-                        <input v-model.number="systemStore.screenBrightness" type="range" min="10" max="100" step="5"
-                          class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-orange-500" />
-                        <p class="text-xs text-gray-400 mt-1 font-medium">调节开发板液晶屏的背光亮度，降低亮度可有效减少发热并延长电池续航。</p>
-                      </div>
-                      <div>
-                        <span class="text-xs text-gray-400 block mb-1.5 font-bold">自动熄屏等待时间 (Screen Sleep)</span>
-                        <select v-model.number="systemStore.screenSleepSeconds"
-                          class="w-full border-2 border-gray-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:border-orange-400 font-bold text-gray-700">
-                          <option :value="5">5 秒无动作自动关屏</option>
-                          <option :value="10">10 秒无动作自动关屏</option>
-                          <option :value="15">15 秒无动作自动关屏 (默认)</option>
-                          <option :value="30">30 秒无动作自动关屏</option>
-                          <option :value="60">1 分钟无动作自动关屏</option>
-                          <option :value="0">从不自动熄屏</option>
-                        </select>
-                        <p class="text-xs text-gray-400 mt-1 font-medium">规定无动作后多少秒自动关闭屏幕。触摸屏幕或语音唤醒会重新点亮。</p>
-                      </div>
-                    </div>
-                  </div>
+                  <p class="text-xs text-gray-400 mt-3">💡 屏幕亮度 / 息屏时间等显示参数为<strong>每设备独立配置</strong>，请在顶部菜单「设备管理」中针对单个终端设置。</p>
                 </div>
               </div>
               <div class="flex justify-end pt-4 border-t border-gray-100">

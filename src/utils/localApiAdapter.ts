@@ -318,24 +318,138 @@ export async function localApiAdapter(config: AxiosRequestConfig): Promise<Axios
 
     if (urlWithoutParams === 'device/settings') {
       if (method === 'get') {
-        const mode = localStorage.getItem('local_task_confirm_mode') || 'auto'
-        const delay = Number(localStorage.getItem('local_task_confirm_delay') || 30)
-        const brightness = Number(localStorage.getItem('local_screen_brightness') || 80)
-        const sleep = Number(localStorage.getItem('local_screen_sleep_seconds') || 15)
+        const deviceId = queryParams.device_id || ''
+        const asr = localStorage.getItem('local_asr_provider') || 'workers-ai'
+        const defBrightness = Number(localStorage.getItem('local_screen_brightness') || 80)
+        const defSleep = Number(localStorage.getItem('local_screen_sleep_seconds') || 15)
+        let brightness = defBrightness
+        let sleep = defSleep
+        let devAsr = asr
+        if (deviceId) {
+          const ds = JSON.parse(localStorage.getItem(`local_device_settings_${deviceId}`) || '{}')
+          if (ds.screen_brightness !== undefined) brightness = ds.screen_brightness
+          if (ds.screen_sleep_seconds !== undefined) sleep = ds.screen_sleep_seconds
+          if (ds.asr_provider !== undefined) devAsr = ds.asr_provider
+        }
         return createMockResponse(config, 200, {
-          task_confirm_mode: mode,
-          task_confirm_delay: delay,
           screen_brightness: brightness,
-          screen_sleep_seconds: sleep
+          screen_sleep_seconds: sleep,
+          asr_provider: devAsr
         })
       }
       if (method === 'post') {
-        if (body.task_confirm_mode !== undefined) localStorage.setItem('local_task_confirm_mode', body.task_confirm_mode)
-        if (body.task_confirm_delay !== undefined) localStorage.setItem('local_task_confirm_delay', String(body.task_confirm_delay))
-        if (body.screen_brightness !== undefined) localStorage.setItem('local_screen_brightness', String(body.screen_brightness))
-        if (body.screen_sleep_seconds !== undefined) localStorage.setItem('local_screen_sleep_seconds', String(body.screen_sleep_seconds))
+        const deviceId = queryParams.device_id || ''
+        if (deviceId) {
+          const key = `local_device_settings_${deviceId}`
+          const ds = JSON.parse(localStorage.getItem(key) || '{}')
+          if (body.screen_brightness !== undefined) ds.screen_brightness = body.screen_brightness
+          if (body.screen_sleep_seconds !== undefined) ds.screen_sleep_seconds = body.screen_sleep_seconds
+          if (body.asr_provider !== undefined) ds.asr_provider = body.asr_provider
+          localStorage.setItem(key, JSON.stringify(ds))
+        } else {
+          if (body.screen_brightness !== undefined) localStorage.setItem('local_screen_brightness', String(body.screen_brightness))
+          if (body.screen_sleep_seconds !== undefined) localStorage.setItem('local_screen_sleep_seconds', String(body.screen_sleep_seconds))
+          if (body.asr_provider !== undefined) localStorage.setItem('local_asr_provider', String(body.asr_provider))
+        }
         return createMockResponse(config, 200, { success: true })
       }
+    }
+
+    // 全局平台设置 (本地模式)
+    if (urlWithoutParams === 'system/settings') {
+      if (method === 'get') {
+        return createMockResponse(config, 200, {
+          task_confirm_mode: localStorage.getItem('local_task_confirm_mode') || 'auto',
+          task_confirm_delay: Number(localStorage.getItem('local_task_confirm_delay') || 30),
+          openrouter_api_key: localStorage.getItem('local_openrouter_api_key') || '',
+          openrouter_model: localStorage.getItem('local_openrouter_model') || 'openrouter/free',
+          groq_api_key: localStorage.getItem('local_groq_api_key') || '',
+          baidu_api_key: localStorage.getItem('local_baidu_api_key') || '',
+          baidu_secret_key: localStorage.getItem('local_baidu_secret_key') || '',
+          asr_provider: localStorage.getItem('local_asr_provider') || 'workers-ai',
+          firmware_latest_version: localStorage.getItem('local_firmware_latest_version') || '2.1.0',
+          firmware_download_url: localStorage.getItem('local_firmware_download_url') || '/firmware/latest.bin',
+          firmware_checksum: localStorage.getItem('local_firmware_checksum') || 'dummy'
+        })
+      }
+      if (method === 'post') {
+        const map: Record<string, string> = {
+          task_confirm_mode: 'local_task_confirm_mode',
+          task_confirm_delay: 'local_task_confirm_delay',
+          openrouter_api_key: 'local_openrouter_api_key',
+          openrouter_model: 'local_openrouter_model',
+          groq_api_key: 'local_groq_api_key',
+          baidu_api_key: 'local_baidu_api_key',
+          baidu_secret_key: 'local_baidu_secret_key',
+          asr_provider: 'local_asr_provider',
+          firmware_latest_version: 'local_firmware_latest_version',
+          firmware_download_url: 'local_firmware_download_url',
+          firmware_checksum: 'local_firmware_checksum'
+        }
+        for (const [k, v] of Object.entries(body || {})) {
+          if (map[k] !== undefined) localStorage.setItem(map[k], String(v))
+        }
+        return createMockResponse(config, 200, { success: true })
+      }
+    }
+
+    // ===== DEVICES (本地模式) =====
+    const getLocalDevices = (): any[] => JSON.parse(localStorage.getItem('local_devices') || '[]')
+    const setLocalDevices = (d: any[]) => localStorage.setItem('local_devices', JSON.stringify(d))
+
+    if (urlWithoutParams === 'devices' && method === 'get') {
+      return createMockResponse(config, 200, { success: true, devices: getLocalDevices() })
+    }
+    if (urlWithoutParams === 'devices/register' && method === 'post') {
+      const devs = getLocalDevices()
+      if (!devs.find(d => d.device_id === body.device_id)) {
+        devs.push({
+          device_id: body.device_id,
+          name: body.name || body.device_id,
+          student_id: null,
+          class_id: body.class_id || null,
+          battery_level: 100,
+          is_charging: 0,
+          last_seen: Date.now(),
+          firmware_version: localStorage.getItem('local_firmware_latest_version') || '2.1.0'
+        })
+        setLocalDevices(devs)
+      }
+      return createMockResponse(config, 200, { success: true, device_id: body.device_id })
+    }
+    if (urlWithoutParams === 'devices/unbound' && method === 'get') {
+      return createMockResponse(config, 200, { success: true, devices: getLocalDevices().filter(d => !d.student_id) })
+    }
+    if (urlWithoutParams.startsWith('devices/') && method === 'get') {
+      const id = decodeURIComponent(urlWithoutParams.slice('devices/'.length))
+      const dev = getLocalDevices().find(d => d.device_id === id)
+      if (!dev) return createMockResponse(config, 404, { error: '设备不存在' })
+      const ds = JSON.parse(localStorage.getItem(`local_device_settings_${id}`) || '{}')
+      return createMockResponse(config, 200, {
+        success: true,
+        device: dev,
+        settings: {
+          screen_brightness: ds.screen_brightness ?? 80,
+          screen_sleep_seconds: ds.screen_sleep_seconds ?? 15,
+          asr_provider: ds.asr_provider ?? 'workers-ai'
+        }
+      })
+    }
+    if (urlWithoutParams.startsWith('devices/') && method === 'put') {
+      const id = decodeURIComponent(urlWithoutParams.slice('devices/'.length))
+      const devs = getLocalDevices()
+      const dev = devs.find(d => d.device_id === id)
+      if (!dev) return createMockResponse(config, 404, { error: '设备不存在' })
+      if (body.student_id !== undefined) dev.student_id = body.student_id || null
+      if (body.name !== undefined) dev.name = body.name
+      if (body.class_id !== undefined) dev.class_id = body.class_id
+      setLocalDevices(devs)
+      return createMockResponse(config, 200, { success: true })
+    }
+    if (urlWithoutParams.startsWith('devices/') && method === 'delete') {
+      const id = decodeURIComponent(urlWithoutParams.slice('devices/'.length))
+      setLocalDevices(getLocalDevices().filter(d => d.device_id !== id))
+      return createMockResponse(config, 200, { success: true })
     }
 
     // 任务审批/拒绝（本地模式下直接返回成功）

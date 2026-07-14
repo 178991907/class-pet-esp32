@@ -112,7 +112,7 @@ export const useStudentStore = defineStore('student', () => {
 
   async function loadUnboundDevices() {
     try {
-      const res = await api.get('/device/unbound-devices')
+      const res = await api.get('/devices/unbound')
       unboundDevicesList.value = res.data.devices || []
     } catch (err) {
       console.error('加载未绑定设备失败:', err)

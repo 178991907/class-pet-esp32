@@ -59,6 +59,35 @@ export async function setSetting(key, value) {
   )
 }
 
+// ============ 设备级配置 (方案 B) ============
+// 优先读 device_settings, 回退全局 settings
+export async function getDeviceSettings(deviceId, keys) {
+  const out = {}
+  for (const k of keys) {
+    let v = null
+    if (deviceId) {
+      const row = await getAsync('SELECT value FROM device_settings WHERE device_id = ? AND key = ?', deviceId, k)
+      if (row) {
+        try { v = JSON.parse(row.value) } catch { v = row.value }
+      }
+    }
+    if (v === null) v = await getSetting(k)
+    out[k] = v
+  }
+  return out
+}
+
+export async function setDeviceSetting(deviceId, key, value) {
+  if (!deviceId) return
+  await runAsync(
+    'INSERT INTO device_settings (device_id, key, value, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(device_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at',
+    deviceId,
+    key,
+    JSON.stringify(value),
+    Date.now()
+  )
+}
+
 // ============ 宠物主人记忆 (owner_profiles) ============
 export async function getOwnerProfile(db, studentId) {
   return await q.get(db, 'SELECT * FROM owner_profiles WHERE student_id = ?', studentId)

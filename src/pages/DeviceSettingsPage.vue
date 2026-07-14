@@ -19,7 +19,7 @@ const CURRENT_FIRMWARE = '2.1.0'
 
 const loading = ref(false)
 const latestFirmware = ref('')
-const settings = ref({ screen_brightness: 80, screen_sleep_seconds: 15 })
+const settings = ref({ screen_brightness: 80, screen_sleep_seconds: 15, asr_provider: 'workers-ai' })
 const saving = ref(false)
 const brightnessPreview = ref(80)
 
@@ -49,14 +49,21 @@ const sysInfo = [
 async function load() {
   loading.value = true
   try {
+    const deviceId = student.value?.device_id
+    if (!deviceId) {
+      toast.error('该学生尚未绑定设备')
+      loading.value = false
+      return
+    }
     const [setRes, fwRes] = await Promise.all([
-      api.get('/device/settings'),
+      api.get('/device/settings', { params: { device_id: deviceId } }),
       api.get('/device/firmware-version').catch(() => null)
     ])
     const s = setRes.data || {}
     settings.value = {
       screen_brightness: s.screen_brightness ?? 80,
-      screen_sleep_seconds: s.screen_sleep_seconds ?? 15
+      screen_sleep_seconds: s.screen_sleep_seconds ?? 15,
+      asr_provider: s.asr_provider ?? 'workers-ai'
     }
     brightnessPreview.value = settings.value.screen_brightness
     if (fwRes && fwRes.data) latestFirmware.value = fwRes.data.latest_version || ''
@@ -70,9 +77,16 @@ async function load() {
 async function saveSettings() {
   saving.value = true
   try {
-    await api.post('/device/settings', {
+    const deviceId = student.value?.device_id
+    if (!deviceId) {
+      toast.error('该学生尚未绑定设备')
+      saving.value = false
+      return
+    }
+    await api.post(`/device/settings?device_id=${encodeURIComponent(deviceId)}`, {
       screen_brightness: settings.value.screen_brightness,
-      screen_sleep_seconds: settings.value.screen_sleep_seconds
+      screen_sleep_seconds: settings.value.screen_sleep_seconds,
+      asr_provider: settings.value.asr_provider
     })
     toast.success('设备设置已保存')
   } catch (e: any) {
@@ -173,6 +187,19 @@ onMounted(load)
             <div class="text-sm text-gray-600 mb-1">息屏时间（秒）</div>
             <input type="number" min="5" max="600" v-model.number="settings.screen_sleep_seconds"
               class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
+          </div>
+
+          <div>
+            <div class="text-sm text-gray-600 mb-1 font-bold">语音识别 (ASR) 提供商</div>
+            <select v-model="settings.asr_provider"
+              class="w-full border-2 border-gray-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:border-orange-400 font-bold text-gray-700">
+              <option value="groq">Groq Whisper (推荐，免费且极速)</option>
+              <option value="openrouter">OpenRouter (通用，余额需 ≥ $0.5)</option>
+              <option value="openai">OpenAI Whisper (需 OpenAI 官方 key)</option>
+              <option value="baidu">百度短语音 (中文免费，月 5 万次)</option>
+              <option value="workers-ai">Workers AI (默认)</option>
+            </select>
+            <p class="text-xs text-gray-400 mt-1">未单独设置时，设备使用系统后台的全局默认 ASR 提供商。</p>
           </div>
 
           <button @click="saveSettings" :disabled="saving"
