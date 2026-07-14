@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useStudentStore } from '@/stores/useStudentStore'
 import { useSystemStore } from '@/stores/useSystemStore'
@@ -20,7 +21,16 @@ const studentStore = useStudentStore()
 const systemStore = useSystemStore()
 const { triggerLevelUp } = useLevelUp()
 const toast = useToast()
-const { isGuest } = useAuth()
+const { isGuest, user } = useAuth()
+
+// 当前角色（响应式）
+const currentRole = computed(() => {
+  if (user.value && !user.value.isGuest) {
+    return user.value.role || 'student'
+  }
+  return 'student'
+})
+const isManager = computed(() => currentRole.value === 'teacher' || currentRole.value === 'admin')
 
 function goFeatures() {
   if (!studentStore.detailStudent) return
@@ -60,28 +70,30 @@ async function handleDetailQuickAdd(rule: Rule) {
       <div class="bg-white rounded-3xl w-full max-w-2xl max-h-[90vh] overflow-auto shadow-2xl animate-scale-in">
         <!-- 头部 -->
         <div class="relative bg-gradient-to-r from-orange-400 via-pink-400 to-purple-400 p-6 rounded-t-3xl">
-          <div class="absolute top-4 right-4 flex gap-2">
-            <button v-if="!isGuest" @click="systemStore.openSchedules(studentStore.detailStudent!)" class="px-3 py-2 bg-white/20 hover:bg-white/30 rounded-full flex items-center gap-1.5 text-white text-sm transition-colors" title="定时日程提醒">
-              <span>📅</span><span class="font-medium">日程提醒</span>
-            </button>
-            <button v-if="!isGuest" @click="goFeatures" class="px-3 py-2 bg-white/20 hover:bg-white/30 rounded-full flex items-center gap-1.5 text-white text-sm transition-colors" title="日历 / 清单 / 闹铃 / 主人记忆">
-              <span>🐾</span><span class="font-medium">成长管理</span>
-            </button>
-            <button v-if="!isGuest" @click="goSettings" class="px-3 py-2 bg-white/20 hover:bg-white/30 rounded-full flex items-center gap-1.5 text-white text-sm transition-colors" title="设备设置与信息">
-              <span>⚙️</span><span class="font-medium">设备设置</span>
-            </button>
-            <button v-if="!isGuest" @click="systemStore.openChatLogs(studentStore.detailStudent!)" class="px-3 py-2 bg-white/20 hover:bg-white/30 rounded-full flex items-center gap-1.5 text-white text-sm transition-colors" title="大模型聊天日志审计">
-              <span>💬</span><span class="font-medium">对话审计</span>
-            </button>
-            <button v-if="!isGuest" @click="emit('changePet', studentStore.detailStudent!); studentStore.closeDetailPanel()" class="px-3 py-2 bg-white/20 hover:bg-white/30 rounded-full flex items-center gap-1.5 text-white text-sm transition-colors" title="更换宠物">
-              <span>🐾</span><span class="font-medium">换宠物</span>
-            </button>
-            <button v-if="!isGuest" @click="emit('editStudent', studentStore.detailStudent!)" class="px-3 py-2 bg-white/20 hover:bg-white/30 rounded-full flex items-center gap-1.5 text-white text-sm transition-colors" title="编辑信息">
-              <span>✏️</span><span class="font-medium">编辑</span>
-            </button>
-            <button @click="studentStore.closeDetailPanel()" class="w-10 h-10 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center text-white text-xl transition-colors" title="关闭">×</button>
+          <div class="absolute top-4 right-4 left-4 flex justify-end">
+            <div class="flex gap-2 flex-wrap justify-end max-w-full">
+              <button v-if="!isGuest" @click="systemStore.openSchedules(studentStore.detailStudent!)" class="px-3 py-2 bg-white/20 hover:bg-white/30 rounded-full flex items-center gap-1.5 text-white text-sm transition-colors whitespace-nowrap" title="定时日程提醒">
+                <span>📅</span><span class="font-medium">日程</span>
+              </button>
+              <button v-if="!isGuest" @click="goFeatures" class="px-3 py-2 bg-white/20 hover:bg-white/30 rounded-full flex items-center gap-1.5 text-white text-sm transition-colors whitespace-nowrap" title="日历 / 清单 / 闹铃 / 主人记忆">
+                <span>🐾</span><span class="font-medium">成长</span>
+              </button>
+              <button v-if="isManager" @click="goSettings" class="px-3 py-2 bg-white/20 hover:bg-white/30 rounded-full flex items-center gap-1.5 text-white text-sm transition-colors whitespace-nowrap" title="设备设置与信息">
+                <span>⚙️</span><span class="font-medium">设备</span>
+              </button>
+              <button v-if="isManager" @click="systemStore.openChatLogs(studentStore.detailStudent!)" class="px-3 py-2 bg-white/20 hover:bg-white/30 rounded-full flex items-center gap-1.5 text-white text-sm transition-colors whitespace-nowrap" title="大模型聊天日志审计">
+                <span>💬</span><span class="font-medium">审计</span>
+              </button>
+              <button v-if="isManager" @click="emit('changePet', studentStore.detailStudent!); studentStore.closeDetailPanel()" class="px-3 py-2 bg-white/20 hover:bg-white/30 rounded-full flex items-center gap-1.5 text-white text-sm transition-colors whitespace-nowrap" title="更换宠物">
+                <span>🐾</span><span class="font-medium">换宠</span>
+              </button>
+              <button v-if="isManager" @click="emit('editStudent', studentStore.detailStudent!)" class="px-3 py-2 bg-white/20 hover:bg-white/30 rounded-full flex items-center gap-1.5 text-white text-sm transition-colors whitespace-nowrap" title="编辑信息">
+                <span>✏️</span><span class="font-medium">编辑</span>
+              </button>
+              <button @click="studentStore.closeDetailPanel()" class="w-10 h-10 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center text-white text-xl transition-colors shrink-0" title="关闭">×</button>
+            </div>
           </div>
-          <div class="flex items-center gap-4">
+          <div class="flex items-center gap-4 pt-14">
             <div class="w-20 h-20 rounded-2xl overflow-hidden bg-white/20 backdrop-blur-sm flex items-center justify-center shadow-lg">
               <img v-if="studentStore.detailStudent.pet_type" :src="getStudentPetImage(studentStore.detailStudent)" class="w-16 h-16 object-contain" />
               <span v-else class="text-4xl">❓</span>
@@ -115,8 +127,8 @@ async function handleDetailQuickAdd(rule: Rule) {
           </div>
         </div>
 
-        <!-- 快速评分 -->
-        <div v-if="!isGuest" class="p-6 border-b border-gray-100">
+        <!-- 快速评分（仅教师/管理员可操作） -->
+        <div v-if="isManager" class="p-6 border-b border-gray-100">
           <h4 class="font-bold text-gray-700 mb-3 flex items-center gap-2"><span>⚡</span> 快速评价</h4>
           <div class="flex gap-2 mb-4 flex-wrap">
             <button

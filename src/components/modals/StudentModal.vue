@@ -56,7 +56,7 @@ async function handleSubmit() {
 
 <template>
   <Transition name="modal">
-    <div v-if="show" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+    <div v-if="show" class="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[60] p-4">
       <div class="bg-white rounded-3xl p-8 w-full max-w-md shadow-2xl animate-scale-in">
         <h3 class="text-xl font-bold mb-6 flex items-center gap-2">
           <span class="text-2xl">👨‍🎓</span> {{ editingStudent ? '编辑学生' : '添加学生' }}

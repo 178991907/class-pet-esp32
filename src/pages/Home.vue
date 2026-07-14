@@ -127,6 +127,7 @@ function handleAddStudent() {
   showStudentModal.value = true
 }
 function handleEditStudent(student: Student) {
+  studentStore.closeDetailPanel()
   studentModalRef.value?.open(student)
   showStudentModal.value = true
 }

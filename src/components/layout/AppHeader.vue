@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useClassStore } from '@/stores/useClassStore'
 import { useStudentStore } from '@/stores/useStudentStore'
 import { useAuth } from '@/composables/useAuth'
@@ -23,16 +23,16 @@ const emit = defineEmits<{
 
 const classStore = useClassStore()
 const studentStore = useStudentStore()
-const { isGuest, username, logout } = useAuth()
+const { isGuest, username, logout, user } = useAuth()
 const toast = useToast()
 
-const currentRole = ref<'student' | 'teacher' | 'admin'>('student')
-
-// 从 user 中获取角色
-const { user } = useAuth()
-if (user.value && !user.value.isGuest) {
-  currentRole.value = user.value.role || 'student'
-}
+// 从 user 中响应式获取当前角色（登录态变化时会自动更新）
+const currentRole = computed<'student' | 'teacher' | 'admin'>(() => {
+  if (user.value && !user.value.isGuest) {
+    return user.value.role || 'student'
+  }
+  return 'student'
+})
 
 // 菜单状态
 const showUserMenu = ref(false)
