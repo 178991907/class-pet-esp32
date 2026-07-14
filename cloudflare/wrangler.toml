@@ -1,4 +1,5 @@
 name = "classpet-api"
+account_id = "ae926ff06a5d4d8c265c84952c6c48b7"
 main = "src/worker.js"
 compatibility_date = "2024-11-01"
 compatibility_flags = ["nodejs_compat"]
