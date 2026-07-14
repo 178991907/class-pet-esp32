@@ -33,3 +33,12 @@ build/
 # Cloudflare local state
 .wrangler/
 cloudflare/.wrangler/
+
+# Firmware build component symlink (points to /tmp, environment-specific)
+firmware/components/
+
+# Vite temp config timestamps
+vite.config.ts.timestamp-*.mjs
+
+# Downloaded HTML scratch in scripts/
+scripts/*.html
