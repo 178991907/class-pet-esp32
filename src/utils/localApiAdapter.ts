@@ -320,14 +320,20 @@ export async function localApiAdapter(config: AxiosRequestConfig): Promise<Axios
       if (method === 'get') {
         const mode = localStorage.getItem('local_task_confirm_mode') || 'auto'
         const delay = Number(localStorage.getItem('local_task_confirm_delay') || 30)
+        const brightness = Number(localStorage.getItem('local_screen_brightness') || 80)
+        const sleep = Number(localStorage.getItem('local_screen_sleep_seconds') || 15)
         return createMockResponse(config, 200, {
           task_confirm_mode: mode,
-          task_confirm_delay: delay
+          task_confirm_delay: delay,
+          screen_brightness: brightness,
+          screen_sleep_seconds: sleep
         })
       }
       if (method === 'post') {
-        localStorage.setItem('local_task_confirm_mode', body.task_confirm_mode)
-        localStorage.setItem('local_task_confirm_delay', String(body.task_confirm_delay))
+        if (body.task_confirm_mode !== undefined) localStorage.setItem('local_task_confirm_mode', body.task_confirm_mode)
+        if (body.task_confirm_delay !== undefined) localStorage.setItem('local_task_confirm_delay', String(body.task_confirm_delay))
+        if (body.screen_brightness !== undefined) localStorage.setItem('local_screen_brightness', String(body.screen_brightness))
+        if (body.screen_sleep_seconds !== undefined) localStorage.setItem('local_screen_sleep_seconds', String(body.screen_sleep_seconds))
         return createMockResponse(config, 200, { success: true })
       }
     }
@@ -360,6 +366,178 @@ export async function localApiAdapter(config: AxiosRequestConfig): Promise<Axios
         reply = `我听到啦${name}：「${msg.slice(0, 30)}」～你说得真棒，我记在心里啦！要不要给宠物加点成长值？🌟`
       }
       return createMockResponse(config, 200, { success: true, reply })
+    }
+
+    // === 宠物主人记忆 / 日历 / 清单 / 闹铃（学生维度管理功能） ===
+    // localStorage 辅助（按学生隔离）
+    const lsGet = (k: string, fallback: any) => {
+      try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : fallback } catch { return fallback }
+    }
+    const lsSet = (k: string, v: any) => { localStorage.setItem(k, JSON.stringify(v)) }
+    const genId = () => 'mock-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
+
+    // ---- 日历 ----
+    let m = urlWithoutParams.match(/^students\/([^/]+)\/calendar\/([^/]+)$/)
+    if (m && method === 'delete') {
+      const sid = m[1]
+      const cid = m[2]
+      const arr = lsGet(`cp_calendar_${sid}`, [])
+      lsSet(`cp_calendar_${sid}`, arr.filter((e: any) => e.id !== cid))
+      return createMockResponse(config, 200, { success: true })
+    }
+    m = urlWithoutParams.match(/^students\/([^/]+)\/calendar$/)
+    if (m) {
+      const sid = m[1]
+      if (method === 'get') {
+        return createMockResponse(config, 200, { success: true, events: lsGet(`cp_calendar_${sid}`, []) })
+      }
+      if (method === 'post') {
+        if (!body.title || !body.event_date) return createMockResponse(config, 400, { error: '缺少 title 或 event_date' })
+        const ev = {
+          id: genId(),
+          student_id: sid,
+          title: String(body.title).slice(0, 80),
+          event_date: String(body.event_date).slice(0, 10),
+          time_str: body.time_str ? String(body.time_str).slice(0, 5) : null,
+          description: body.description ? String(body.description).slice(0, 200) : '',
+          created_at: Date.now()
+        }
+        const arr = lsGet(`cp_calendar_${sid}`, [])
+        arr.push(ev)
+        lsSet(`cp_calendar_${sid}`, arr)
+        return createMockResponse(config, 200, { success: true, id: ev.id })
+      }
+    }
+
+    // ---- 清单 ----
+    m = urlWithoutParams.match(/^students\/([^/]+)\/checklist\/([^/]+)$/)
+    if (m) {
+      const sid = m[1]
+      const cid = m[2]
+      if (method === 'put') {
+        const arr = lsGet(`cp_checklist_${sid}`, [])
+        const item = arr.find((e: any) => e.id === cid)
+        if (item) { item.is_done = body.is_done ? 1 : 0; lsSet(`cp_checklist_${sid}`, arr) }
+        return createMockResponse(config, 200, { success: true })
+      }
+      if (method === 'delete') {
+        const arr = lsGet(`cp_checklist_${sid}`, [])
+        lsSet(`cp_checklist_${sid}`, arr.filter((e: any) => e.id !== cid))
+        return createMockResponse(config, 200, { success: true })
+      }
+    }
+    m = urlWithoutParams.match(/^students\/([^/]+)\/checklist$/)
+    if (m) {
+      const sid = m[1]
+      if (method === 'get') {
+        return createMockResponse(config, 200, { success: true, items: lsGet(`cp_checklist_${sid}`, []) })
+      }
+      if (method === 'post') {
+        if (!body.content) return createMockResponse(config, 400, { error: '缺少 content' })
+        const item = {
+          id: genId(),
+          student_id: sid,
+          content: String(body.content).slice(0, 120),
+          is_done: 0,
+          created_at: Date.now()
+        }
+        const arr = lsGet(`cp_checklist_${sid}`, [])
+        arr.push(item)
+        lsSet(`cp_checklist_${sid}`, arr)
+        return createMockResponse(config, 200, { success: true, id: item.id })
+      }
+    }
+
+    // ---- 闹铃 / 定时 ----
+    m = urlWithoutParams.match(/^device\/schedules\/student\/([^/]+)$/)
+    if (m) {
+      const sid = m[1]
+      if (method === 'get') {
+        return createMockResponse(config, 200, { success: true, schedules: lsGet(`cp_schedules_${sid}`, []) })
+      }
+      if (method === 'post') {
+        if (!body.day_of_week || !body.time_str || !body.task_desc) return createMockResponse(config, 400, { error: '参数缺失' })
+        const s = {
+          id: genId(),
+          student_id: sid,
+          day_of_week: Number(body.day_of_week),
+          time_str: String(body.time_str).slice(0, 5),
+          task_desc: String(body.task_desc).slice(0, 120),
+          is_active: 1,
+          created_at: Date.now()
+        }
+        const arr = lsGet(`cp_schedules_${sid}`, [])
+        arr.push(s)
+        lsSet(`cp_schedules_${sid}`, arr)
+        return createMockResponse(config, 200, { success: true, id: s.id })
+      }
+    }
+    m = urlWithoutParams.match(/^device\/schedules\/([^/]+)$/)
+    if (m && method === 'delete') {
+      const cid = m[1]
+      // 需要找到所属学生：遍历所有 cp_schedules_* 删除该 id
+      const keys = Object.keys(localStorage).filter(k => k.startsWith('cp_schedules_'))
+      for (const k of keys) {
+        const arr = lsGet(k, [])
+        const filtered = arr.filter((e: any) => e.id !== cid)
+        if (filtered.length !== arr.length) { lsSet(k, filtered); break }
+      }
+      return createMockResponse(config, 200, { success: true })
+    }
+
+    // ---- 宠物主人记忆 ----
+    m = urlWithoutParams.match(/^students\/([^/]+)\/owner-profile$/)
+    if (m) {
+      const sid = m[1]
+      const key = `cp_owner_${sid}`
+      if (method === 'get') {
+        const p = lsGet(key, { profile: null, emotion_log: [], learning_log: [] })
+        return createMockResponse(config, 200, { success: true, profile: p.profile || null, emotion_log: p.emotion_log || [], learning_log: p.learning_log || [] })
+      }
+      if (method === 'post') {
+        const p = lsGet(key, { profile: null, emotion_log: [], learning_log: [] })
+        const now = Date.now()
+        if (body.type === 'profile' && body.data) {
+          p.profile = body.data
+        } else if (body.type === 'emotion' && body.data) {
+          p.emotion_log = p.emotion_log || []
+          p.emotion_log.push({ ts: now, ...body.data })
+          if (p.emotion_log.length > 100) p.emotion_log = p.emotion_log.slice(-100)
+        } else if (body.type === 'learning' && body.data) {
+          p.learning_log = p.learning_log || []
+          p.learning_log.push({ ts: now, ...body.data })
+          if (p.learning_log.length > 100) p.learning_log = p.learning_log.slice(-100)
+        } else {
+          return createMockResponse(config, 400, { error: '未知 type' })
+        }
+        lsSet(key, p)
+        return createMockResponse(config, 200, { success: true })
+      }
+    }
+
+    // ---- 设备状态（设置页用） ----
+    if (urlWithoutParams === 'device/status' && method === 'get') {
+      const deviceId = queryParams.device_id || '28:84:85:42:1C:74'
+      return createMockResponse(config, 200, {
+        status: 'ok',
+        student: {
+          id: 'mock-device',
+          name: '本机设备',
+          device_id: deviceId,
+          battery_level: 88,
+          is_charging: 0,
+          last_seen: Date.now()
+        }
+      })
+    }
+
+    // ---- 固件版本（设置页用） ----
+    if (urlWithoutParams === 'device/firmware-version' && method === 'get') {
+      return createMockResponse(config, 200, {
+        latest_version: '2.1.0',
+        download_url: '/firmware/latest.bin',
+        checksum: 'mock'
+      })
     }
 
     // 默认回包

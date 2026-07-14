@@ -4,3 +4,5 @@
 build/
 sdkconfig
 *.local
+/firmware/lib/esp-sr/
+node_modules/

@@ -85,6 +85,14 @@ public:
   // 5. 上报电量与充电状态心跳
   static bool sendHeartbeat(int batteryLevel, bool isCharging);
 
+  // 6. 功能数据拉取 (日历 / 清单 / 宠物主人记忆 / 闹铃), 返回原始 JSON 字符串
+  static bool getCalendarEvents(String& outJson);
+  static bool getChecklist(String& outJson);
+  static bool getOwnerProfile(String& outJson);
+  static bool getSchedules(String& outJson);
+  // 切换清单项完成状态 (PUT /device/checklist/:id)
+  static bool putChecklistItem(const String& id, bool done);
+
   // 5. 辅助函数：计算带时间戳的 HMAC-SHA256 签名，生成 Hex 字符串
   static String calculateSignature(const String& timestamp, const String& requestBody);
 

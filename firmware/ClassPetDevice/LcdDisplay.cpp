@@ -13,9 +13,14 @@ static uint32_t get_sys_millis(void) {
 }
 
 void LcdDisplay::init() {
-  // 1. 初始化背光引脚并点亮屏幕
+  // 1. 初始化背光引脚 (LEDC PWM 调光，支持亮度调节)
   pinMode(TFT_BL_PIN, OUTPUT);
-  digitalWrite(TFT_BL_PIN, HIGH);
+  // 配置 LEDC: 通道 0, 5kHz, 8 位分辨率
+  _ledc_channel = 0;
+  ledcSetup(_ledc_channel, 5000, 8);
+  ledcAttachPin(TFT_BL_PIN, _ledc_channel);
+  _is_screen_on = true;
+  setBrightness(80); // 默认亮度，setup 中会用 DeviceSettings 覆盖
   
   // 2. 初始化 TFT_eSPI 并配置方向
   _tft.init();
@@ -61,17 +66,24 @@ void LcdDisplay::resetActivityTime() {
   _last_activity_time = millis();
   if (!_is_screen_on) {
     _is_screen_on = true;
-    digitalWrite(TFT_BL_PIN, HIGH);
+    // 背光由 setBrightness 控制；唤醒时由调用方恢复目标亮度
+  }
+}
+
+void LcdDisplay::setBrightness(int pct) {
+  if (pct < 0) pct = 0;
+  if (pct > 100) pct = 100;
+  // 0-100 映射到 0-255，并做最小可见钳位(1 仍为最暗而非全黑，0 才是全黑)
+  int duty = (pct * 255) / 100;
+  if (pct > 0 && duty == 0) duty = 1;
+  if (_ledc_channel >= 0) {
+    ledcWrite(_ledc_channel, duty);
+  } else {
+    digitalWrite(TFT_BL_PIN, pct > 0 ? HIGH : LOW);
   }
 }
 
 void LcdDisplay::update() {
-  // 息屏检查 (15秒无操作则直接息屏省电)
-  if (_is_screen_on && (millis() - _last_activity_time > 15000)) {
-    _is_screen_on = false;
-    digitalWrite(TFT_BL_PIN, LOW);
-  }
-
   // 加锁保护 LVGL 渲染循环，防止与状态机跨核冲突
   if (xSemaphoreTake(_lvgl_mutex, portMAX_DELAY) == pdTRUE) {
     lv_timer_handler();

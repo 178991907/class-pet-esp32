@@ -6,9 +6,23 @@
 
 ---
 
-## 🚀 最新版本：v1.4.2 (硬件重生与会说话的宠物)
+## 🚀 最新版本：v1.6.0 (离线唤醒词与语料库语音控制)
 
-- **🎙️ 零延迟流媒体 TTS 合成**：后端新增 `ttsService.js`，无缝对接百度“度丫丫”童声与免费保底接口。单片机直接拉取音频流，实现秒级发声，打通智能语音对话最后一块拼图！
+- **🗣️ 离线唤醒词「你好小智」**：集成 esp-sr 1.0 本地唤醒模型，无需联网、无需调用大模型，板载完成唤醒词检测（已修复模拟麦克风灵敏度问题，数字域预放大 ×10 抬升信号至可用区间）。
+- **🧠 语料库语音控制（不调大模型）**：新增本地正则语料库 `cloudflare/src/intents.js`，覆盖「申报加分 / 查积分 / 设定提醒 / 加日历 / 加待办 / 勾待办 / 喂食 / 换宠物 / 开始番茄钟 / 查清单 / 帮助」11 类操作。命中即执行、毫秒级响应、零 token 消耗。
+- **📱 设备端可语音操作全部功能**：唤醒后说一句话即可操作系统功能，后端 `voice-do.js` + `worker.js` 改为「语料优先」——ASR 识别后先跑语料匹配，命中直接落库；设备端解析 `action` 自动触发（番茄钟用语音指定分钟、换宠物由在线同步自动重载动画）。仅闲聊 / 情感互动才回退大模型。
+
+---
+
+## 🚀 历史版本：v1.5.0 (中文字库 TF 卡运行时加载)
+
+- **📚 中文字库改为 TF 卡运行时加载**：字库与固件分离，首次启动自动从服务器下载 `cjk16.bin` 至 TF 卡，由 PSRAM 重建点阵字体，固件体积大幅下降、中文显示不再依赖内置子集。
+
+---
+
+## 🚀 历史版本：v1.4.2 (硬件重生与会说话的宠物)
+
+- **🎙️ 零延迟流媒体 TTS 合成**：后端新增 `ttsService.js`，无缝对接百度"度丫丫"童声与免费保底接口。单片机直接拉取音频流，实现秒级发声，打通智能语音对话最后一块拼图！
 - **🛠️ 修复底层音频通信**：彻底重构 `ESP32Audio.cpp`，铲除错误的音频编解码依赖，重映射麦克风 (`IO8`) 与功放使能 (`IO1`)，硬件 100% 满血复活！
 
 ---
@@ -105,8 +119,9 @@
 - **路由管理**：Vue Router (HTML5 History 模式)
 
 ### 后端 (Backend)
-- **运行环境**：Node.js + Express
-- **数据库**：SQLite (`better-sqlite3`) / Serverless PostgreSQL (Neon)
+- **生产环境 (Cloudflare 无服务器)**：Cloudflare Worker (`classpet-api`) + Durable Object (`VoiceDO`，承载 WebSocket 长连与 SQLite) + D1 数据库；前端托管于 Cloudflare Pages (`pet.classe.ccwu.cc`)。
+- **本地 / 传统环境**：Node.js + Express (`server/`) + SQLite / PostgreSQL，用于本地联调。
+- **语音链路**：Whisper (ASR) + Workers AI LLM (闲聊) + 语料库正则 (离线指令) + TTS 代理。
 - **执行沙箱**：`isolated-vm` / Node 原生 `vm` 超时沙箱隔离（安全解析教师上传的多音源脚本）
 
 ### 硬件设备端 (Firmware)
@@ -120,8 +135,8 @@
 
 ### 1. 克隆项目
 ```bash
-git clone https://github.com/178991907/class-pet.git
-cd class-pet
+git clone https://github.com/178991907/class-pet-esp32.git
+cd class-pet-esp32
 ```
 
 ### 2. 纯前端模式运行
@@ -141,6 +156,13 @@ cd class-pet
    npm run start
    ```
 2. 在浏览器中打开 `http://localhost:3001`，数据会保存在本地 SQLite 数据库中。
+
+### 4. Cloudflare 生产部署（推荐，免运维）
+1. 部署后端（Worker + Durable Object + D1）：
+   ```bash
+   cd cloudflare && npx wrangler deploy
+   ```
+2. 部署前端到 Cloudflare Pages（控制台「连接 Git」或推送触发）：构建命令 `npm run build`、输出目录 `dist`、环境变量 `VITE_API_URL=https://api.classe.ccwu.cc`。详细步骤见 [docs/cloudflare-pages-github-binding.md](docs/cloudflare-pages-github-binding.md)。
 
 ---
 
@@ -177,27 +199,44 @@ node server/scripts/auto_test_device.js
 ## 📦 项目结构说明
 
 ```
-class-pet/
-├── src/                      # 前端源码
+class-pet-esp32/
+├── src/                      # 前端源码 (Vue 3 + TypeScript)
 │   ├── main.ts              # 前端入口
-│   ├── pages/Home.vue       # 系统主页（业务 UI 与设备管理审批控制台）
-├── server/                   # 后端源码
-│   ├── index.js             # 后端 API 入口
-│   ├── db.js                # 数据库结构与初始化 (支持 SQLite & PostgreSQL)
-│   ├── routes/
-│   │   └── device.js        # 通用硬件专属控制、高可用音源沙箱与防重放 API
-│   └── scripts/
-│       ├── auto_test_device.js # 自动化硬件通信集成测试脚本
-│       ├── device_simulator.js # 高交互式硬件串口及网络模拟器
-│       ├── pg_init.sql      # Neon PostgreSQL 建表与索引优化脚本
-│       └── sqlite_to_pg.js  # 一键本地数据平滑迁移上云 (PostgreSQL) 脚本
-├── firmware/                 # 物联网开发板通用 C++/Arduino 固件工程
-│   ├── README.md            # 固件硬件移植与对时加密机制说明文档
-│   └── ClassPetDevice/      # 固件项目目录 (含 .ino 主程序及 HAL 外设抽象层)
-├── DEPLOY_GUIDE.md          # 详细的 Neon PostgreSQL 迁移与 Vercel 部署配置指南
-├── vercel.json              # Vercel Serverless Functions 路由分发配置文件
-└── package.json             # 项目依赖配置
+│   ├── pages/               # 页面 (Home / DeviceSettings / StudentFeatures ...)
+│   └── components/          # 业务组件与模态框
+├── cloudflare/               # 生产后端 (Cloudflare Worker + Durable Object + D1)
+│   ├── worker.js            # Worker 入口 / 路由 / 语音流水线
+│   ├── voice-do.js          # Durable Object: WebSocket 长连 + 动作执行
+│   ├── intents.js           # 🧠 语料库意图匹配 (本地正则, 不调大模型)
+│   ├── ai.js                # ASR / LLM / TTS 适配
+│   ├── db.js                # D1 数据库访问
+│   ├── migrations/          # D1 SQL 迁移
+│   └── wrangler.toml        # Cloudflare 部署配置
+├── server/                   # 传统本地后端 (Express, 仅供本地联调)
+├── firmware/                 # ESP32-S3 固件 (Arduino C++)
+│   ├── ClassPetDevice/      # 固件工程 (含 .ino 主程序 + HAL 外设抽象层)
+│   └── lib/esp-sr/          # esp-sr 1.0 唤醒词模型 (构建时从 /tmp 链接)
+├── docs/                     # 部署与操作文档 (如 Cloudflare Pages 绑定)
+├── tools/                    # 字库 / 字体生成脚本
+├── pages.toml                # Cloudflare Pages 项目配置
+└── package.json             # 前端依赖与脚本
 ```
+
+---
+
+## 📌 Releases 与版本说明
+
+本项目采用语义化版本（SemVer）。每个正式版本均打 Git Tag（如 `v1.6.0`）并发布 GitHub Release，包含变更日志与固件说明。
+
+- **GitHub Releases**：https://github.com/178991907/class-pet-esp32/releases
+- **版本规则**：`主版本.次版本.修订` —— 新增功能升次版本（如 v1.5.0 → v1.6.0），纯修复升修订。
+- **固件烧录**：ESP32-S3 用户使用 `arduino-cli` 或 Arduino IDE 打开 `firmware/ClassPetDevice/ClassPetDevice.ino` 编译烧录（详见 `DEVELOPMENT_STANDARD.md`）。
+
+### 当前最新版本 v1.6.0 亮点
+- 🗣️ 离线唤醒词「你好小智」（esp-sr 1.0 本地模型，数字预放大修复灵敏度）
+- 🧠 语料库语音控制（11 类操作本地正则匹配，不调大模型，毫秒级 + 省 token）
+- 📱 设备端语音操作系统全部功能（加分 / 积分 / 日程 / 待办 / 喂食 / 换宠 / 番茄钟）
+- ☁️ Cloudflare 生产栈（Worker + Durable Object + D1 + Pages）成为默认部署
 
 ---
 

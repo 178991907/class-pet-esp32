@@ -76,3 +76,52 @@ export interface PaginatedResponse<T> {
   pageSize: number
   totalPages: number
 }
+
+// 日历事件（学生个人日历）
+export interface CalendarEvent {
+  id: string
+  student_id?: string
+  title: string
+  event_date: string        // YYYY-MM-DD
+  time_str: string | null   // HH:MM 或 null
+  description?: string
+  created_at?: number
+}
+
+// 清单/待办项
+export interface ChecklistItem {
+  id: string
+  student_id?: string
+  content: string
+  is_done: number           // 0 | 1
+  created_at?: number
+}
+
+// 闹铃/定时（复用 schedules 表）
+export interface Schedule {
+  id: string
+  student_id?: string
+  day_of_week: number       // 0=周日 ... 6=周六
+  time_str: string          // HH:MM
+  task_desc: string
+  is_active?: number        // 0 | 1
+  created_at?: number
+}
+
+// 宠物主人记忆
+export interface OwnerEmotionEntry {
+  ts: number
+  mood?: string
+  note?: string
+}
+export interface OwnerLearningEntry {
+  ts: number
+  subject?: string
+  content?: string
+  status?: string
+}
+export interface OwnerProfile {
+  profile: Record<string, any> | null
+  emotion_log: OwnerEmotionEntry[]
+  learning_log: OwnerLearningEntry[]
+}

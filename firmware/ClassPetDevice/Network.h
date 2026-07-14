@@ -45,6 +45,9 @@ public:
   // 获取设备 MAC 地址
   static String getMacAddress();
 
+  // 获取当前分配到的本地 IP 地址 (未连接时返回空串)
+  static String getLocalIP();
+
   // 获取当前的 Unix 时间戳（秒），若未同步则返回 0
   static uint32_t getUnixTimestamp();
 

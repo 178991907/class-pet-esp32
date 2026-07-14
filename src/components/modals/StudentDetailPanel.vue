@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useRouter } from 'vue-router'
 import { useStudentStore } from '@/stores/useStudentStore'
 import { useSystemStore } from '@/stores/useSystemStore'
 import { useLevelUp } from '@/composables/useLevelUp'
@@ -14,11 +15,23 @@ const emit = defineEmits<{
   changePet: [student: Student]
 }>()
 
+const router = useRouter()
 const studentStore = useStudentStore()
 const systemStore = useSystemStore()
 const { triggerLevelUp } = useLevelUp()
 const toast = useToast()
 const { isGuest } = useAuth()
+
+function goFeatures() {
+  if (!studentStore.detailStudent) return
+  studentStore.closeDetailPanel()
+  router.push(`/student/${studentStore.detailStudent.id}/features`)
+}
+function goSettings() {
+  if (!studentStore.detailStudent) return
+  studentStore.closeDetailPanel()
+  router.push(`/student/${studentStore.detailStudent.id}/settings`)
+}
 
 function getStudentPetImage(student: Student): string {
   if (!student.pet_type) return ''
@@ -50,6 +63,12 @@ async function handleDetailQuickAdd(rule: Rule) {
           <div class="absolute top-4 right-4 flex gap-2">
             <button v-if="!isGuest" @click="systemStore.openSchedules(studentStore.detailStudent!)" class="px-3 py-2 bg-white/20 hover:bg-white/30 rounded-full flex items-center gap-1.5 text-white text-sm transition-colors" title="定时日程提醒">
               <span>📅</span><span class="font-medium">日程提醒</span>
+            </button>
+            <button v-if="!isGuest" @click="goFeatures" class="px-3 py-2 bg-white/20 hover:bg-white/30 rounded-full flex items-center gap-1.5 text-white text-sm transition-colors" title="日历 / 清单 / 闹铃 / 主人记忆">
+              <span>🐾</span><span class="font-medium">成长管理</span>
+            </button>
+            <button v-if="!isGuest" @click="goSettings" class="px-3 py-2 bg-white/20 hover:bg-white/30 rounded-full flex items-center gap-1.5 text-white text-sm transition-colors" title="设备设置与信息">
+              <span>⚙️</span><span class="font-medium">设备设置</span>
             </button>
             <button v-if="!isGuest" @click="systemStore.openChatLogs(studentStore.detailStudent!)" class="px-3 py-2 bg-white/20 hover:bg-white/30 rounded-full flex items-center gap-1.5 text-white text-sm transition-colors" title="大模型聊天日志审计">
               <span>💬</span><span class="font-medium">对话审计</span>

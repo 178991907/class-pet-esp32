@@ -196,7 +196,8 @@ void DeviceStateMachine::handleEvent(DeviceEvent ev) {
     case EVENT_POMODORO_START:
       if (_state == STATE_NORMAL_ONLINE || _state == STATE_NORMAL_OFFLINE || _state == STATE_POMODORO_SETTINGS) {
         DEBUG_PRINTLN("🍅 [状态机] 收到事件: 启动番茄工作钟");
-        uint32_t mins = ClassPetUI::getInstance().getSelectedTomatoTime();
+        uint32_t mins = _voiceTomatoMinutes > 0 ? (uint32_t)_voiceTomatoMinutes : ClassPetUI::getInstance().getSelectedTomatoTime();
+        _voiceTomatoMinutes = 0;
         tomatoTimer.start(mins);
         _state = STATE_POMODORO;
       }
@@ -949,6 +950,18 @@ void DeviceStateMachine::handleWsText(const String& text) {
     LVGL_LOCK();
     ClassPetUI::getInstance().setVoiceOverlayCaption(false, t);
     LVGL_UNLOCK();
+    // 语音控制: 解析 action 并路由到对应设备动作(无需大模型参与)
+    const char* action = doc["action"] | "";
+    if (strcmp(action, "start_pomodoro") == 0) {
+      if (doc.containsKey("params") && doc["params"].containsKey("minutes")) {
+        _voiceTomatoMinutes = doc["params"]["minutes"] | 0;
+      }
+      Serial.printf("🍅 [WS] 语音启动番茄钟 (%d 分钟)\n", _voiceTomatoMinutes);
+      postEvent(EVENT_POMODORO_START);
+    } else if (strcmp(action, "change_pet") == 0) {
+      // 后端已更新 pet_type, 由 20s 在线同步自动重载宠物动画
+      Serial.println("🐾 [WS] 语音更换宠物, 等待下次同步刷新");
+    }
   } else if (strcmp(type, "tts") == 0) {
     if (doc.containsKey("state")) {
       const char* st = doc["state"] | "";

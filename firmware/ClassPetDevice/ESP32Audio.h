@@ -9,6 +9,10 @@
 
 class ESP32Audio : public AudioHAL {
 private:
+  // I2S_NUM_0 当前驱动模式 (单一所有者, 避免唤醒词/录音/播放争夺同一外设)
+  enum I2sMode { I2S_MODE_NONE = 0, I2S_MODE_RX_MIC, I2S_MODE_TX_PLAY };
+  I2sMode _i2sMode = I2S_MODE_NONE;
+
   Audio audioStream;           // ESP32-audioI2S 音频流（MP3 解码 + I2S TX）
   bool is_playing;
   bool is_recording;
@@ -56,8 +60,14 @@ public:
   void stopPcmPlayback() override;
   bool isPcmPlaying() override { return _pcm_playing; }
 
-  // ===== 离线唤醒词 (esp-sr) =====
-  // 切换 ES8311 到麦克风输入并静音功放 (不触碰 I2S 驱动, WakeWordEngine 自管 I2S)
+  // ===== I2S_NUM_0 单一所有者 (唤醒词/录音/播放 共用) =====
+  bool ensureRxMic() override;        // 确保 RX(麦克风)模式 (幂等)
+  void releaseI2s() override;         // 卸载当前驱动, 标记 NONE
+  void installTxPlay(uint32_t sampleRate = 44100) override;  // 装 TX(播放)驱动
+  void restoreIdleRxMic() override;   // 播放结束恢复 RX(麦克风)基线
+
+  // ===== 离线唤醒词 (esp-sr) (向后兼容) =====
+  // 切换 ES8311 到麦克风输入并静音功放 (新代码应直接走 ensureRxMic)
   void enterWakeMicMode() override;
   void exitWakeMicMode() override;
 

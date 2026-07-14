@@ -69,9 +69,20 @@ public:
   // 16. 是否正在 PCM 播放
   virtual bool isPcmPlaying() { return false; }
 
-  // ================= 离线唤醒词 (esp-sr) 支持 =================
-  // 17. 唤醒词常驻监听: 切换 ES8311 到麦克风输入并静音功放 (WakeWordEngine 调用)
-  //     不触碰 I2S 驱动 (WakeWordEngine 自己负责 I2S RX 安装/卸载)
+  // ================= I2S_NUM_0 单一所有者 (唤醒词 / 录音 / 播放 共用同一 I2S 外设) =================
+  // 19. 确保 I2S_NUM_0 处于 RX(麦克风)模式 (16k/16bit/单声道, DIN=GPIO6).
+  //     空闲唤醒词监听与录音共用此基线; 已处于该模式则直接返回 true (幂等),
+  //     避免重复 i2s_driver_install 触发 ESP_ERR_INVALID_STATE 死循环.
+  virtual bool ensureRxMic() { return false; }
+  // 20. 卸载当前 I2S 驱动 (无论 TX/RX), 标记为 NONE. 供播放流程在让 AudioStream 自行安装 TX 前调用.
+  virtual void releaseI2s() { (void)0; }
+  // 21. 安装 TX(播放)驱动 (DOUT=GPIO8). sampleRate: 44100(MP3) 或 16000(PCM 流式).
+  virtual void installTxPlay(uint32_t sampleRate = 44100) { (void)sampleRate; }
+  // 22. 播放结束后恢复 RX(麦克风)基线 (ES8311 mic 模式 + 静音功放). 空闲态唤醒词监听依赖此基线.
+  virtual void restoreIdleRxMic() { (void)0; }
+
+  // ================= 离线唤醒词 (esp-sr) 支持 (向后兼容, 新代码请用 ensureRxMic) =================
+  // 17. 唤醒词常驻监听: 切换 ES8311 到麦克风输入并静音功放
   virtual void enterWakeMicMode() { (void)0; }
   // 18. 退出唤醒词监听: 恢复功放使能 (ES8311 模式由后续播放/录音流程设置)
   virtual void exitWakeMicMode() { (void)0; }

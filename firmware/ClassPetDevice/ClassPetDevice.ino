@@ -15,6 +15,8 @@
 #include "LcdDisplay.h"
 #include "ClassPetUI.h"
 #include "DeviceStateMachine.h"
+#include "DeviceSettings.h"
+#include <ArduinoJson.h>
 
 #if defined(ESP32)
   #include <esp_system.h>
@@ -26,6 +28,15 @@
 DeviceConfig deviceConfig;
 AudioHAL* audio = nullptr;
 TomatoTimer tomatoTimer;
+
+// 功能屏后台同步请求 (1=日历 2=清单 3=闹铃 4=主人记忆)，由主循环消费
+volatile uint8_t g_featureReq = 0;
+uint32_t g_lastAlarmFetch = 0;
+uint32_t g_lastAlarmCheckMin = 0;
+String g_alarmsJson = "";
+
+// 前向声明
+static String urlEncode(const String& str);
 
 // 串口诊断模式标志: 当通过串口执行 test_mic/test_speaker/test_tts 时置为 true,
 // 阻止状态机 (Core 1) 同时操作 I2S 驱动导致崩溃
@@ -112,9 +123,139 @@ void onPomodoroFinished() {
   if (audio) {
     String ringtoneUrl = String(deviceConfig.server_url) + "/audio/ringtone.wav";
     audio->playAudioStream(ringtoneUrl);
+    // 语音提醒: 倒计时的时间到了
+    String ttsUrl = ApiClient::buildApiUrl("/device/tts-stream?text=" + urlEncode("倒计时的时间到了"));
+    audio->playAudioStream(ttsUrl);
   }
 
   DeviceStateMachine::getInstance().postEvent(EVENT_POMODORO_STOP); // 切回正常态
+}
+
+// 全局息屏状态, 供 ClassPetUI.cpp 的待机唤醒回调使用
+bool g_screen_off = false;
+
+// ==========================================
+// 7. 电源策略 (待机变暗 / 息屏 / 唤醒)
+// ==========================================
+void updatePowerPolicy() {
+  static bool dimmed = false;
+  unsigned long idle = millis() - LcdDisplay::getInstance().getLastActivityTime();
+  int brightness = DeviceSettings::getBrightness();
+  int standby = DeviceSettings::getStandbySeconds();
+  int off = DeviceSettings::getScreenOffSeconds();
+
+  if (g_screen_off) {
+    if (idle < 1000) { // 触摸唤醒
+      g_screen_off = false;
+      dimmed = false;
+      LcdDisplay::getInstance().setBrightness(brightness);
+      // 必须在 LVGL 互斥锁内切换屏幕, 否则与 lvglTask(Core0) 渲染竞态导致卡死
+      LcdDisplay::getInstance().lock();
+      ClassPetUI::getInstance().forceSwitchToNormal();
+      LcdDisplay::getInstance().unlock();
+    }
+    return;
+  }
+  if (off > 0 && idle > (unsigned long)off * 1000) {
+    g_screen_off = true;
+    dimmed = false;
+    LcdDisplay::getInstance().setBrightness(0);
+    LcdDisplay::getInstance().lock();
+    ClassPetUI::getInstance().showStandbyClock();
+    LcdDisplay::getInstance().unlock();
+  } else if (standby > 0 && idle > (unsigned long)standby * 1000) {
+    if (!dimmed) {
+      dimmed = true;
+      int dim = (brightness / 3 < 8) ? 8 : (brightness / 3);
+      LcdDisplay::getInstance().setBrightness(dim);
+    }
+  } else {
+    if (dimmed) {
+      dimmed = false;
+      LcdDisplay::getInstance().setBrightness(brightness);
+    }
+  }
+}
+
+// 北京本地 epoch -> 周几(1=周一..7=周日)/时/分
+void beijingToParts(uint32_t epoch, int& wday, int& hh, int& mm) {
+  uint32_t days = epoch / 86400;
+  uint32_t secs = epoch % 86400;
+  hh = secs / 3600;
+  mm = (secs % 3600) / 60;
+  int w = (4 + days) % 7; // 1970-01-01 是周四, Sunday=0
+  wday = (w == 0) ? 7 : w;
+}
+
+void triggerAlarm(const String& desc) {
+  if (audio) {
+    String tts = "闹钟时间到了";
+    if (desc.length()) tts += "，" + desc;
+    String ttsUrl = ApiClient::buildApiUrl("/device/tts-stream?text=" + urlEncode(tts));
+    audio->playAudioStream(ttsUrl);
+  }
+  LcdDisplay::getInstance().lock();
+  ClassPetUI::getInstance().showToast(desc.length() ? ("⏰ " + desc) : "⏰ 闹钟", 8000);
+  LcdDisplay::getInstance().unlock();
+}
+
+void updateAlarms() {
+  uint32_t now = Network::getUnixTimestamp();
+  if (now == 0) return;
+  // 每 5 分钟刷新一次闹铃列表
+  if (now - g_lastAlarmFetch > 300) {
+    g_lastAlarmFetch = now;
+    ApiClient::getSchedules(g_alarmsJson);
+  }
+  uint32_t nowMin = now / 60;
+  if (nowMin == g_lastAlarmCheckMin) return;
+  g_lastAlarmCheckMin = nowMin;
+  if (g_alarmsJson.length() == 0) return;
+
+  DynamicJsonDocument doc(1024);
+  if (deserializeJson(doc, g_alarmsJson)) return;
+  JsonArray scheds = doc["schedules"].as<JsonArray>();
+  if (!scheds) return;
+
+  int wday, hh, mm;
+  beijingToParts(now, wday, hh, mm);
+  char nowTime[6];
+  snprintf(nowTime, sizeof(nowTime), "%02d:%02d", hh, mm);
+
+  for (JsonObject s : scheds) {
+    int d = s["day_of_week"].as<int>();
+    String t = s["time_str"].as<String>();
+    if (d == wday && t == String(nowTime)) {
+      triggerAlarm(s["task_desc"].as<String>());
+    }
+  }
+}
+
+// ==========================================
+// 8. 功能屏后台数据同步 (由 markFeatureSync 触发)
+// ==========================================
+void processFeatureSync() {
+  if (g_featureReq == 0) return;
+  if (!Network::isConnected()) return;
+  if (DeviceStateMachine::getInstance().isVoiceSessionActive()) return; // 语音期间不打断
+
+  uint8_t type = g_featureReq;
+  g_featureReq = 0;
+
+  String out;
+  bool ok = false;
+  if (type == 1) ok = ApiClient::getCalendarEvents(out);
+  else if (type == 2) ok = ApiClient::getChecklist(out);
+  else if (type == 3) ok = ApiClient::getSchedules(out);
+  else if (type == 4) ok = ApiClient::getOwnerProfile(out);
+
+  LcdDisplay::getInstance().lock();
+  if (ok) {
+    ClassPetUI::getInstance().renderFeatureData(type, out);
+  } else {
+    ClassPetUI::getInstance().showToast("同步失败，请检查网络", 2000);
+  }
+  LcdDisplay::getInstance().unlock();
 }
 
 // ==========================================
@@ -166,6 +307,11 @@ void setup() {
   
   // 注册番茄钟计时结束回调
   tomatoTimer.onFinished(onPomodoroFinished);
+
+  // 应用本地设置: 音量 + 屏幕亮度
+  DeviceSettings::begin();
+  if (audio) audio->setVolume(DeviceSettings::getVolume());
+  LcdDisplay::getInstance().setBrightness(DeviceSettings::getBrightness());
   
   // 创建 LVGL 图形线程，分配 8KB 堆栈，运行于 Core 0，优先级 4
   xTaskCreatePinnedToCore(lvglTask, "LVGLTask", 8192, nullptr, 4, nullptr, 0);
@@ -207,6 +353,7 @@ static void handleSerialCommands() {
     Serial.println("可用命令:");
     Serial.println("  test_speaker - 播放测试音频 (测试喇叭硬件)");
     Serial.println("  test_mic     - 录音 3 秒并报告电平 (测试麦克风硬件)");
+    Serial.println("  mic_sweep    - 扫描 ES8311 REG14/REG17 组合, 定位能采到语音的寄存器 (说话时运行)");
     Serial.println("  test_tts     - 播放 Google TTS 中文语音 (测试网络+TTS+喇叭)");
     Serial.println("  test_tone    - 直接 I2S 1kHz 音调测试 (绕过 Audio 库, 验证硬件链路)");
     Serial.println("  set_server <url> - 设置后端服务器地址并保存 (重启后生效)");
@@ -404,6 +551,63 @@ static void handleSerialCommands() {
     return;
   }
 
+  if (cmd == "voice_test") {
+    DeviceState currentState = DeviceStateMachine::getInstance().getState();
+    if (currentState == STATE_RECORDING || currentState == STATE_PROCESSING || currentState == STATE_PLAYING_AUDIO) {
+      Serial.println("⚠️ [测试] 状态机正在使用音频硬件，请稍后再试！");
+      return;
+    }
+    Serial.println("🎙️ [测试] 启动语音流程 (模拟点击语音申报)...");
+    Serial.println("🎙️ [测试] >>> 请立即对着麦克风清晰说话 (约 5 秒) <<<");
+    Serial.flush();
+    DeviceStateMachine::getInstance().postEvent(EVENT_VOICE_START);
+    vTaskDelay(pdMS_TO_TICKS(5000));
+    Serial.println("🎙️ [测试] >>> 自动结束录音并发送识别 <<<");
+    Serial.flush();
+    DeviceStateMachine::getInstance().postEvent(EVENT_VOICE_RECORD_DONE);
+    return;
+  }
+
+  if (cmd == "standby") {
+    // 直接进入待机时钟界面 (模拟息屏超时), 用于验证待机屏不卡死
+    Serial.println("💡 [测试] 强制进入待机时钟界面");
+    g_screen_off = true;
+    LcdDisplay::getInstance().setBrightness(0);
+    LcdDisplay::getInstance().lock();
+    ClassPetUI::getInstance().showStandbyClock();
+    LcdDisplay::getInstance().unlock();
+    return;
+  }
+
+  if (cmd == "wake") {
+    // 从待机唤醒 (模拟触摸), 用于验证唤醒路径不卡死
+    Serial.println("💡 [测试] 从待机唤醒");
+    g_screen_off = false;
+    LcdDisplay::getInstance().resetActivityTime();
+    LcdDisplay::getInstance().setBrightness(DeviceSettings::getBrightness());
+    LcdDisplay::getInstance().lock();
+    ClassPetUI::getInstance().forceSwitchToNormal();
+    LcdDisplay::getInstance().unlock();
+    return;
+  }
+
+  if (cmd == "mic_sweep") {
+    DeviceState currentState = DeviceStateMachine::getInstance().getState();
+    if (currentState == STATE_RECORDING || currentState == STATE_PROCESSING || currentState == STATE_PLAYING_AUDIO) {
+      Serial.println("⚠️ [扫描] 状态机正在使用音频硬件，请稍后再试！");
+      return;
+    }
+    if (audio->isPlaying()) { audio->stopAudio(); vTaskDelay(pdMS_TO_TICKS(200)); }
+    serial_diag_active = true;
+    Serial.println("[MICSWEEP] >>> 开始麦克风寄存器扫描, 请立即持续说话! <<<");
+    Serial.flush();
+    audio->micSweepTest();
+    serial_diag_active = false;
+    Serial.println("[MICSWEEP] >>> 扫描结束 <<<");
+    Serial.flush();
+    return;
+  }
+
   if (cmd == "test_tone") {
     serial_diag_active = true;
     Serial.println("🔊 [测试] 开始直接 I2S 音调测试 (绕过 Audio 库)...");
@@ -444,8 +648,19 @@ void loop() {
   if (audio) {
     audio->update();
   }
-  // 轮询语音 WebSocket: 接收服务端下发的 TTS PCM 与 stt/llm/tts 控制消息
-  DeviceStateMachine::getInstance().pollVoiceWs();
+  // 轮询语音 WebSocket: 接收服务端下发的 TTS PCM 与 stt/llm/tts 控制消息。
+  // 关键: 录音期间 (STATE_RECORDING) 必须跳过下行轮询! 此时 I2S_NUM_0 被配置为 RX 模式,
+  // 若收到 TTS PCM 会触发 startPcmPlayback() 卸载 RX 驱动并 i2s_write, 导致录音 update() 崩溃重启。
+  // 录音结束进入 PROCESSING 后才会恢复下行轮询, 此时再播放 TTS 是安全的。
+  if (!DeviceStateMachine::getInstance().isRecording()) {
+    DeviceStateMachine::getInstance().pollVoiceWs();
+  }
+
+  // 电源策略 (待机/息屏/唤醒) + 功能数据同步 + 闹铃触发
+  updatePowerPolicy();
+  processFeatureSync();
+  updateAlarms();
+
   vTaskDelay(pdMS_TO_TICKS(5)); // 5ms 阻塞轮询，避免看门狗超时
 }
 

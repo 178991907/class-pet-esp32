@@ -125,6 +125,11 @@ bool ESP32Audio::initES8311() {
     return false;
   }
 
+  // 7. 使能 MICBIAS 麦克风偏置电压(~2.7V, 寄存器0x0F)。
+  //    驱动 es8311_init 默认不动 0x0F; 模拟 MEMS 麦克风无偏置则信号极弱(差~27dB),
+  //    导致录音/唤醒词收不到人声。必须在 init 一次性打开。
+  es8311_write_reg_local(ES8311_SYSTEM_REG10, 0x41);  // 关键: 使能 VMID/麦克风偏置(寄存器0x10)
+
   s_es8311_inited = true;
   Serial.println("✅ [ES8311] 编解码器初始化成功 (44100Hz, MCLK=11.29MHz, vol=85)");
   dumpES8311Regs();
@@ -153,17 +158,15 @@ void ESP32Audio::init() {
     Serial.println("❌ [音频] ES8311 Codec 初始化失败！");
   }
 
-  // 3. 配置 Audio 库的 I2S 引脚（播放用）
-  //    关键修正：按官方示例，I2S 引脚为 BCLK=5, WS=7, DOUT=8, MCLK=4
-  //    Audio 库默认使用 I2S_NUM_0
-  audioStream.setPinout(I2S_BCLK_PIN, I2S_LRC_PIN, I2S_DOUT_PIN,
-                        I2S_PIN_NO_CHANGE, I2S_MCLK_PIN);
-  audioStream.setVolume(12); // 0-21, 适中音量
+  // 3. I2S 引脚由 I2S 模式管理器 (ensureRxMic/installTxPlay) 统一设置.
+  //    启动时不预装 TX 驱动 —— 空闲基线为 RX(麦克风)模式, 由唤醒词引擎经 ensureRxMic() 装入.
+  audioStream.setVolume(12); // 0-21, 适中音量 (仅设置 AudioStream 音量参数, 不安装驱动)
   is_playing = false;
+  _i2sMode = I2S_MODE_NONE;
 
-  Serial.printf("🔊 [音频] I2S 播放引脚: BCLK=%d, WS=%d, DOUT=%d, MCLK=%d\n",
+  Serial.printf("🔊 [音频] I2S 播放引脚 (播放时): BCLK=%d, WS=%d, DOUT=%d, MCLK=%d\n",
     I2S_BCLK_PIN, I2S_LRC_PIN, I2S_DOUT_PIN, I2S_MCLK_PIN);
-  Serial.println("🎙️ [音频] 录音驱动将在 startRecording() 时动态切换 (I2S_NUM_0 TX/RX)");
+  Serial.println("🎙️ [音频] 空闲基线 = RX(麦克风)模式, 由唤醒词引擎 ensureRxMic() 装入 (I2S_NUM_0)");
 }
 
 void ESP32Audio::writeWavHeader() {
@@ -212,84 +215,31 @@ void ESP32Audio::startRecording() {
 
   Serial.println("🔊 [音频] 准备进行 I2S 麦克风录音...");
 
-  // 录音时必须关闭功放 (FM8002E IO1 低电平使能), 否则扬声器会播放
-  // 环境噪音/录音回授, 产生吱啦声并淹没麦克风真实信号。
-  digitalWrite(AUDIO_EN_PIN, HIGH);
-  Serial.printf("🔇 [音频] 录音时关闭功放 (IO%d=HIGH)\n", AUDIO_EN_PIN);
-
-  // 如果正在播放，先停止
+  // 如果正在播放，先停止 (stopAudio 内会 stopSong, 后续 ensureRxMic 负责卸载 TX)
   if (is_playing) {
     stopAudio();
   }
 
-  // ===== 卸载 I2S_NUM_0 的 TX 驱动（Audio 库），重新安装为 RX 驱动 =====
-  Serial.println("🔧 [音频] 卸载 I2S_NUM_0 TX 驱动 (Audio 库播放) ...");
-  audioStream.stopSong();
-  i2s_driver_uninstall(I2S_NUM_0);
-  vTaskDelay(pdMS_TO_TICKS(50));
-
-  // 重新配置 ES8311 为录音模式（16kHz）
-  if (s_es8311_inited && s_es8311_handle) {
-    es8311_sample_frequency_config(s_es8311_handle,
-      REC_SAMPLE_RATE * REC_MCLK_MULTIPLE, REC_SAMPLE_RATE);
-    es8311_microphone_config(s_es8311_handle, false);
-    // 经 mic_sweep 实测: 本板 MEMS 麦克风接在 ES8311 的 REG14=0x0A 输入 (信号最强, rms 最高),
-    // 驱动默认 0x1A 与之前误试的 0x10 在该板几乎无信号 -> 录音全静音 -> Whisper 幻觉为 'you'。
-    // ADC 音量 REG17=0xF0 电平最佳 (pk~16250 不削波); 0xC8 太轻, 0xFF 易削波。
-    es8311_write_reg_local(ES8311_SYSTEM_REG14, 0x0A);
-    es8311_write_reg_local(ES8311_ADC_REG17, 0xF0);
-    es8311_microphone_gain_set(s_es8311_handle, ES8311_MIC_GAIN_30DB);
-    Serial.println("✅ [ES8311] 已切换到录音模式 (16kHz, REG14=0x0A MIC, REG17=0xF0, MIC_GAIN_30DB)");
-  }
-
-  // 安装 I2S_NUM_0 为 MASTER RX
-  i2s_config_t i2s_rx_config = {
-    .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
-    .sample_rate = REC_SAMPLE_RATE,
-    .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
-    .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
-    .communication_format = I2S_COMM_FORMAT_STAND_I2S,
-    .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-    .dma_buf_count = 8,
-    .dma_buf_len = 1024,
-    .use_apll = false,
-    .tx_desc_auto_clear = false,
-    .fixed_mclk = 0
-  };
-  // 录音引脚：DIN 接 ES8311 的 SDOUT。Board.h 明确定义 I2S_DIN_PIN=GPIO6 为
-  // ES8311 SDOUT(ADC/麦克风)->ESP32 的数据线; I2S_DOUT_PIN=GPIO8 是 ESP32->ES8311 SDIN(DAC)。
-  // 必须用 GPIO6 读麦克风, 用 GPIO8 读到的只是 DAC 输入脚的数字垃圾。
-  i2s_pin_config_t rx_pin_config = {
-    .mck_io_num = I2S_MCLK_PIN,
-    .bck_io_num = I2S_BCLK_PIN,
-    .ws_io_num = I2S_LRC_PIN,
-    .data_out_num = I2S_PIN_NO_CHANGE,
-    .data_in_num = I2S_DIN_PIN
-  };
-
-  esp_err_t install_err = i2s_driver_install(I2S_PORT_REC, &i2s_rx_config, 0, NULL);
-  esp_err_t pin_err = i2s_set_pin(I2S_PORT_REC, &rx_pin_config);
-
-  if (install_err != ESP_OK || pin_err != ESP_OK) {
-    Serial.printf("❌ [音频] I2S RX 安装失败! install=%s pin=%s\n",
-      esp_err_to_name(install_err), esp_err_to_name(pin_err));
-    restorePlaybackI2S();
+  // 确保 I2S_NUM_0 处于 RX(麦克风)模式.
+  // 空闲态已由唤醒词引擎装入 RX 基线, ensureRxMic 幂等复用; 若处于 TX(播放)则自动切换.
+  // ES8311 麦克风模式 + 静音功放由 ensureRxMic 内部统一处理 (与唤醒词监听一致).
+  if (!ensureRxMic()) {
+    Serial.println("❌ [音频] 无法进入 RX 麦克风模式, 录音中止");
+    restoreIdleRxMic();
     return;
   }
-  Serial.printf("✅ [音频] I2S_NUM_0 已切换为 MASTER RX 模式 (DIN=GPIO%d)\n", I2S_DIN_PIN);
+  Serial.printf("✅ [音频] I2S_NUM_0 已就绪 MASTER RX (DIN=GPIO%d)\n", I2S_DIN_PIN);
 
   if (SD_MMC.cardType() == CARD_NONE) {
     Serial.println("❌ 录音失败，SD 卡不可用！");
-    i2s_driver_uninstall(I2S_PORT_REC);
-    restorePlaybackI2S();
+    restoreIdleRxMic();
     return;
   }
 
   record_file = SD_MMC.open("/record.wav", FILE_WRITE);
   if (!record_file) {
     Serial.println("❌ 录音失败，无法创建文件！");
-    i2s_driver_uninstall(I2S_PORT_REC);
-    restorePlaybackI2S();
+    restoreIdleRxMic();
     return;
   }
 
@@ -326,25 +276,9 @@ bool ESP32Audio::stopRecording(uint8_t*& wavBuffer, size_t& wavSize) {
     }
   }
 
-  // ===== 卸载 RX 驱动，恢复 TX 驱动 =====
-  Serial.println("🔧 [音频] 卸载 I2S_NUM_0 RX 驱动，恢复 TX 播放驱动...");
-  i2s_driver_uninstall(I2S_PORT_REC);
-  vTaskDelay(pdMS_TO_TICKS(50));
-
-  // 恢复 ES8311 为播放模式（44.1kHz）
-  if (s_es8311_inited && s_es8311_handle) {
-    es8311_sample_frequency_config(s_es8311_handle,
-      PLAYBACK_SAMPLE_RATE * 256, PLAYBACK_SAMPLE_RATE);
-    es8311_voice_volume_set(s_es8311_handle, 85, NULL);
-    Serial.println("✅ [ES8311] 已切换回播放模式 (44100Hz, vol=85)");
-  }
-
-  // 恢复功放使能（低电平），让后续播放能正常出声
-  digitalWrite(AUDIO_EN_PIN, LOW);
-  Serial.printf("🔊 [音频] 恢复功放 (IO%d=LOW)\n", AUDIO_EN_PIN);
-
-  // 恢复 I2S_NUM_0 给 Audio 库使用
-  restorePlaybackI2S();
+  // ===== 录音结束: 恢复 RX(麦克风)空闲基线 (ES8311 mic 模式 + 静音功放) =====
+  // 空闲态唤醒词监听依赖此基线; 若接下来要播放, playAudioStream/startPcmPlayback 会自行切 TX.
+  restoreIdleRxMic();
 
   wavBuffer = nullptr;
   wavSize = 0;
@@ -376,9 +310,111 @@ void ESP32Audio::restorePlaybackI2S() {
   Serial.println("✅ [音频] I2S_NUM_0 播放驱动已恢复");
 }
 
-// ===== 离线唤醒词 (esp-sr) =====
-// 切换 ES8311 到麦克风输入并静音功放。不触碰 I2S 驱动 —— I2S RX 的
-// 安装/卸载完全由 WakeWordEngine 管理, 避免与录音/播放流程争夺 I2S_NUM_0。
+// ================= I2S_NUM_0 单一所有者: 模式管理器 =================
+// 唤醒词监听 / 录音 共用 RX(麦克风) 基线; 播放时临时切 TX, 结束恢复 RX。
+// 所有 i2s_driver_install / uninstall 只发生在这里, 杜绝多子系统争夺同一外设。
+
+bool ESP32Audio::ensureRxMic() {
+  if (_i2sMode == I2S_MODE_RX_MIC) return true;   // 幂等: 已是 RX 麦克风基线
+  // 卸载可能存在的 TX / 旧驱动 (无驱动时 uninstall 返回错误可忽略)
+  i2s_driver_uninstall(I2S_NUM_0);
+  vTaskDelay(pdMS_TO_TICKS(20));
+
+  // ES8311 切到麦克风模式 + 静音功放。
+  // 关键: 必须完全交给驱动 API 配置, 不得手动写 REG14/REG17 —— 驱动
+  // es8311_microphone_config(false) 已正确写 REG14=0x1A(使能模拟MIC+最大PGA增益)
+  // 与 REG17=0xC8(ADC增益); 曾经误写 REG14=0x0A 把"模拟MIC使能"位清掉, 导致 ADC
+  // 读不到麦克风(恒定噪声), 唤醒词/录音永远收不到人声。
+  digitalWrite(AUDIO_EN_PIN, HIGH);
+  if (s_es8311_inited && s_es8311_handle) {
+    es8311_sample_frequency_config(s_es8311_handle,
+      REC_SAMPLE_RATE * REC_MCLK_MULTIPLE, REC_SAMPLE_RATE);
+    es8311_microphone_config(s_es8311_handle, false);
+    es8311_microphone_gain_set(s_es8311_handle, ES8311_MIC_GAIN_30DB);
+    // 关键: 使能 ES8311 MICBIAS 麦克风偏置(~2.7V, 寄存器0x0F)。
+    // 驱动 es8311_init 默认不动 0x0F, 模拟 MEMS 麦克风无偏置则信号弱~27dB, 唤醒词收不到人声。
+    es8311_write_reg_local(ES8311_SYSTEM_REG10, 0x41);  // 关键: 使能 VMID/麦克风偏置(寄存器0x10), 否则模拟麦克风信号被压低~30dB
+  }
+
+  i2s_config_t rx_cfg = {
+    .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
+    .sample_rate = REC_SAMPLE_RATE,
+    .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
+    .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
+    .communication_format = I2S_COMM_FORMAT_STAND_I2S,
+    .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
+    .dma_buf_count = 8,
+    .dma_buf_len = 1024,
+    .use_apll = false,
+    .tx_desc_auto_clear = false,
+    .fixed_mclk = 0
+  };
+  i2s_pin_config_t rx_pins = {
+    .mck_io_num = I2S_MCLK_PIN,
+    .bck_io_num = I2S_BCLK_PIN,
+    .ws_io_num = I2S_LRC_PIN,
+    .data_out_num = I2S_PIN_NO_CHANGE,
+    .data_in_num = I2S_DIN_PIN
+  };
+  esp_err_t e = i2s_driver_install(I2S_NUM_0, &rx_cfg, 0, NULL);
+  i2s_set_pin(I2S_NUM_0, &rx_pins);
+  if (e != ESP_OK) {
+    Serial.printf("⚠️ [音频] ensureRxMic 安装返回 %s (已尽力继续)\n", esp_err_to_name(e));
+  }
+  _i2sMode = I2S_MODE_RX_MIC;
+  Serial.printf("✅ [音频] I2S_NUM_0 已置 RX(麦克风)基线 (DIN=GPIO%d, 16kHz)\n", I2S_DIN_PIN);
+  return true;
+}
+
+void ESP32Audio::releaseI2s() {
+  i2s_driver_uninstall(I2S_NUM_0);
+  _i2sMode = I2S_MODE_NONE;
+}
+
+void ESP32Audio::installTxPlay(uint32_t sampleRate) {
+  i2s_driver_uninstall(I2S_NUM_0);
+  vTaskDelay(pdMS_TO_TICKS(20));
+  digitalWrite(AUDIO_EN_PIN, LOW);  // 功放使能 (播放需出声)
+  if (s_es8311_inited && s_es8311_handle) {
+    es8311_sample_frequency_config(s_es8311_handle, sampleRate * 256, sampleRate);
+    es8311_voice_volume_set(s_es8311_handle, 85, NULL);
+  }
+  i2s_config_t tx_cfg = {
+    .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
+    .sample_rate = sampleRate,
+    .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
+    .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
+    .communication_format = I2S_COMM_FORMAT_STAND_I2S,
+    .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
+    .dma_buf_count = 8,
+    .dma_buf_len = 1024,
+    .use_apll = false,
+    .tx_desc_auto_clear = true,
+    .fixed_mclk = 0
+  };
+  i2s_pin_config_t tx_pins = {
+    .mck_io_num = I2S_MCLK_PIN,
+    .bck_io_num = I2S_BCLK_PIN,
+    .ws_io_num = I2S_LRC_PIN,
+    .data_out_num = I2S_DOUT_PIN,
+    .data_in_num = I2S_PIN_NO_CHANGE
+  };
+  esp_err_t e = i2s_driver_install(I2S_NUM_0, &tx_cfg, 0, NULL);
+  i2s_set_pin(I2S_NUM_0, &tx_pins);
+  if (e != ESP_OK) {
+    Serial.printf("⚠️ [音频] installTxPlay(%u) 安装返回 %s\n", sampleRate, esp_err_to_name(e));
+  }
+  _i2sMode = I2S_MODE_TX_PLAY;
+  Serial.printf("🔊 [音频] I2S_NUM_0 已置 TX(播放)驱动 (DOUT=GPIO%d, %uHz)\n", I2S_DOUT_PIN, sampleRate);
+}
+
+void ESP32Audio::restoreIdleRxMic() {
+  _i2sMode = I2S_MODE_NONE;   // 强制 ensureRxMic 重新安装, 避免状态机 shortcut 误判
+  ensureRxMic();
+}
+
+// ===== 离线唤醒词 (esp-sr) (向后兼容, 新代码走 ensureRxMic) =====
+// 切换 ES8311 到麦克风输入并静音功放。I2S RX 的安装/卸载统一由上面的模式管理器负责。
 void ESP32Audio::enterWakeMicMode() {
   // 录音时必须关闭功放 (FM8002E IO1 低电平使能), 否则扬声器播放环境噪音/回授,
   // 淹没麦克风真实信号并产生吱啦声。
@@ -389,12 +425,9 @@ void ESP32Audio::enterWakeMicMode() {
     es8311_sample_frequency_config(s_es8311_handle,
       REC_SAMPLE_RATE * REC_MCLK_MULTIPLE, REC_SAMPLE_RATE);
     es8311_microphone_config(s_es8311_handle, false);
-    // 经 mic_sweep 实测: 本板 MEMS 麦克风接在 ES8311 的 REG14=0x0A 输入 (信号最强),
-    // ADC 音量 REG17=0xF0 电平最佳 (pk~16250 不削波)。
-    es8311_write_reg_local(ES8311_SYSTEM_REG14, 0x0A);
-    es8311_write_reg_local(ES8311_ADC_REG17, 0xF0);
     es8311_microphone_gain_set(s_es8311_handle, ES8311_MIC_GAIN_30DB);
-    Serial.println("✅ [音频] 唤醒词监听: ES8311 已切到麦克风模式 (16kHz, REG14=0x0A, REG17=0xF0, GAIN_30DB)");
+    es8311_write_reg_local(ES8311_SYSTEM_REG10, 0x41);  // 关键: 使能 VMID/麦克风偏置(寄存器0x10), 否则模拟麦克风信号被压低~30dB  // 使能 MICBIAS 偏置(~2.7V)
+    Serial.println("✅ [音频] 唤醒词监听: ES8311 已切到麦克风模式 (16kHz, MICBIAS=0x34, GAIN_30DB)");
   }
 }
 
@@ -410,12 +443,17 @@ bool ESP32Audio::playAudioStream(const String& url) {
     stopRecording(p, s);
   }
 
-  // 确保 ES8311 处于播放模式
+  // ES8311 切到 44.1k 播放模式 + 功放使能 (播放需出声)
+  digitalWrite(AUDIO_EN_PIN, LOW);
   if (s_es8311_inited && s_es8311_handle) {
+    es8311_sample_frequency_config(s_es8311_handle,
+      PLAYBACK_SAMPLE_RATE * 256, PLAYBACK_SAMPLE_RATE);
     es8311_voice_volume_set(s_es8311_handle, 85, NULL);
   }
 
-  // 确保 I2S 引脚已配置
+  // 卸载当前 I2S 驱动 (RX 基线或上一首 TX), 让 AudioStream 在 connecttohost 时干净地安装 TX.
+  releaseI2s();
+  // 确保 I2S 引脚已配置 (AudioStream 内部 i2s_driver_install 用这些引脚)
   audioStream.setPinout(I2S_BCLK_PIN, I2S_LRC_PIN, I2S_DOUT_PIN,
                         I2S_PIN_NO_CHANGE, I2S_MCLK_PIN);
 
@@ -425,6 +463,9 @@ bool ESP32Audio::playAudioStream(const String& url) {
   if (!ret) {
     is_playing = false;
     Serial.println("❌ [音频] 网络连接失败，停止播放。");
+    restoreIdleRxMic();   // 失败也回到 RX 基线, 保持唤醒词可监听
+  } else {
+    _i2sMode = I2S_MODE_TX_PLAY;  // AudioStream 已装 TX 驱动
   }
   return ret;
 }
@@ -458,6 +499,8 @@ void ESP32Audio::update() {
     if (!audioStream.isRunning()) {
       is_playing = false;
       Serial.println("🔊 [音频] 音频流播放完毕。");
+      // 播放结束: 恢复 RX(麦克风)空闲基线, 让唤醒词引擎可继续监听
+      restoreIdleRxMic();
     }
   }
 
@@ -518,18 +561,13 @@ void ESP32Audio::playTestTone(int frequency, int duration_ms) {
     vTaskDelay(pdMS_TO_TICKS(100));
   }
 
-  // 2. 确保 ES8311 处于播放模式
-  if (s_es8311_inited && s_es8311_handle) {
-    es8311_voice_volume_set(s_es8311_handle, 85, NULL);
-    Serial.println("🔊 [音调测试] ES8311 已设为播放模式 (vol=85)");
-  }
-
-  // 3. 确保功放使能
-  digitalWrite(AUDIO_EN_PIN, LOW);
+  // 2. 统一由模式管理器安装 TX(44100) 播放驱动 (ES8311 DAC + 功放使能)
+  audioStream.stopSong();
+  installTxPlay(PLAYBACK_SAMPLE_RATE);
+  Serial.println("🔊 [音调测试] ES8311 已设为播放模式 (vol=85)");
   Serial.printf("🔊 [音调测试] 功放使能 IO%d=%s\n", AUDIO_EN_PIN, digitalRead(AUDIO_EN_PIN) ? "HIGH" : "LOW");
 
-  // 4. 设置 I2S 采样率为 44100Hz
-  i2s_set_sample_rates(I2S_NUM_0, PLAYBACK_SAMPLE_RATE);
+  // 3. 开始播放
   Serial.printf("🔊 [音调测试] 开始播放 %dHz 正弦波, 持续 %dms\n", frequency, duration_ms);
 
   // 5. 生成并写入正弦波数据
@@ -569,6 +607,9 @@ void ESP32Audio::playTestTone(int frequency, int duration_ms) {
   Serial.println("   2. ES8311 寄存器配置不正确（看上方寄存器转储）");
   Serial.println("   3. FM8002E 功放未使能或损坏");
   Serial.println("   4. 喇叭接线问题");
+
+  // 恢复 RX(麦克风)空闲基线, 让唤醒词引擎回到可监听状态
+  restoreIdleRxMic();
 }
 
 // ================= 麦克风寄存器扫描诊断 =================
@@ -581,9 +622,8 @@ void ESP32Audio::micSweepTest() {
   digitalWrite(AUDIO_EN_PIN, HIGH);
   vTaskDelay(pdMS_TO_TICKS(20));
 
-  // 卸载可能已安装的 TX 驱动
-  audioStream.stopSong();
-  i2s_driver_uninstall(I2S_NUM_0);
+  // 卸载当前驱动 (统一由模式管理器), 标记 NONE
+  releaseI2s();
   vTaskDelay(pdMS_TO_TICKS(30));
 
   // 安装 I2S_NUM_0 为 MASTER RX (与 startRecording 一致)
@@ -610,17 +650,48 @@ void ESP32Audio::micSweepTest() {
   esp_err_t ierr = i2s_driver_install(I2S_NUM_0, &i2s_rx_config, 0, NULL);
   if (ierr != ESP_OK) {
     Serial.printf("[MICSWEEP] RX 驱动安装失败: %s\n", esp_err_to_name(ierr));
-    restorePlaybackI2S();
+    restoreIdleRxMic();
     return;
   }
   i2s_set_pin(I2S_NUM_0, &rx_pin_config);
+  _i2sMode = I2S_MODE_RX_MIC;
 
   if (s_es8311_inited && s_es8311_handle) {
     es8311_sample_frequency_config(s_es8311_handle, REC_SAMPLE_RATE * REC_MCLK_MULTIPLE, REC_SAMPLE_RATE);
   }
 
-  const uint8_t reg14s[] = {0x00,0x02,0x04,0x06,0x08,0x0A,0x0C,0x0E,
-                             0x10,0x12,0x14,0x16,0x18,0x1A,0x1C,0x1E};
+  // ---- 偏置电压扫描: 找出能让麦克风信号增强的 MICBIAS 寄存器/值 ----
+  // (不同版本 ES8311 偏置寄存器不同: 0x0F / 0x16 / 0x10 均有说法, 实测 0x0F=0x34 无效)
+  struct {uint8_t reg; uint8_t val;} biases[] = {
+    {0x0F,0x34},{0x0F,0x3C},{0x0F,0x44},{0x16,0x02},{0x10,0x41},{0xFF,0x00}
+  };
+  int Nb = sizeof(biases)/sizeof(biases[0]);
+  for (int k = 0; k < Nb; k++) {
+    uint8_t br = biases[k].reg, bv = biases[k].val;
+    if (br != 0xFF && s_es8311_inited && s_es8311_handle) {
+      es8311_microphone_config(s_es8311_handle, false);
+      es8311_write_reg_local(ES8311_SYSTEM_REG14, 0x1A);
+      es8311_write_reg_local(ES8311_ADC_REG17, 0xF0);
+      es8311_write_reg_local(br, bv);
+      es8311_microphone_gain_set(s_es8311_handle, ES8311_MIC_GAIN_30DB);
+    }
+    vTaskDelay(pdMS_TO_TICKS(60));
+    int64_t sumSq=0; int32_t n=0; int16_t pk=0; uint32_t t0=millis();
+    uint8_t buf[512];
+    while (millis()-t0 < 300) {
+      size_t rd=0;
+      if (i2s_read(I2S_NUM_0, buf, sizeof(buf), &rd, pdMS_TO_TICKS(40))==ESP_OK && rd>0) {
+        int16_t* s=(int16_t*)buf; int cnt=rd/2;
+        for(int i=0;i<cnt;i++){int32_t v=s[i];sumSq+=(int64_t)v*v;int16_t av=abs(v);if(av>pk)pk=av;n++;}
+      }
+    }
+    int rms = n? (int)sqrt((double)sumSq/n):0;
+    Serial.printf("[MICSWEEP] BIAS R%02X=%02X -> rms=%4d pk=%5d\n", br, bv, rms, pk);
+  }
+  Serial.println("[MICSWEEP] === 偏置扫描结束, 以下继续 REG14/REG17 扫描 ===");
+
+  // 仅扫 bit4=1 的组合 (bit4=0 会关闭模拟麦克风输入, 见 ES8311 REG14 定义)
+  const uint8_t reg14s[] = {0x10,0x12,0x14,0x16,0x18,0x1A,0x1C,0x1E};
   const uint8_t reg17s[] = {0xC8, 0xE0, 0xF0};
   const int N14 = sizeof(reg14s)/sizeof(reg14s[0]);
   const int N17 = sizeof(reg17s)/sizeof(reg17s[0]);
@@ -665,15 +736,8 @@ void ESP32Audio::micSweepTest() {
   }
 
   Serial.println("[MICSWEEP] 扫描完成。rms/pk 显著大于 0 且不过载(<=20000)的组合即为可用配置。");
-  // 恢复播放驱动
-  i2s_driver_uninstall(I2S_NUM_0);
-  vTaskDelay(pdMS_TO_TICKS(30));
-  if (s_es8311_inited && s_es8311_handle) {
-    es8311_sample_frequency_config(s_es8311_handle, PLAYBACK_SAMPLE_RATE * 256, PLAYBACK_SAMPLE_RATE);
-    es8311_voice_volume_set(s_es8311_handle, 85, NULL);
-  }
-  digitalWrite(AUDIO_EN_PIN, LOW);
-  restorePlaybackI2S();
+  // 恢复 RX(麦克风)空闲基线, 让唤醒词引擎回到可监听状态
+  restoreIdleRxMic();
 }
 
 // ================= 流式语音 PCM 播放 (Route B) =================
@@ -687,47 +751,9 @@ bool ESP32Audio::startPcmPlayback() {
   }
   if (_pcm_playing) return true;
 
-  // 1. ES8311 切到 16kHz 播放模式
-  if (s_es8311_inited && s_es8311_handle) {
-    es8311_sample_frequency_config(s_es8311_handle, 16000 * 256, 16000);
-    es8311_voice_volume_set(s_es8311_handle, 85, NULL);
-  }
-  // 确保功放使能
-  digitalWrite(AUDIO_EN_PIN, LOW);
-
-  // 2. 卸载可能已安装的 Audio 库 TX 驱动, 再装我们自己的 16k TX 驱动
+  // 停止可能进行的 MP3 播放, 然后统一由模式管理器安装 TX(16k) 驱动
   audioStream.stopSong();
-  i2s_driver_uninstall(I2S_NUM_0);
-  vTaskDelay(pdMS_TO_TICKS(50));
-
-  i2s_config_t tx_cfg = {
-    .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
-    .sample_rate = 16000,
-    .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
-    .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
-    .communication_format = I2S_COMM_FORMAT_STAND_I2S,
-    .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
-    .dma_buf_count = 8,
-    .dma_buf_len = 1024,
-    .use_apll = false,
-    .tx_desc_auto_clear = true,
-    .fixed_mclk = 0
-  };
-  i2s_pin_config_t tx_pin = {
-    .mck_io_num = I2S_MCLK_PIN,
-    .bck_io_num = I2S_BCLK_PIN,
-    .ws_io_num = I2S_LRC_PIN,
-    .data_out_num = I2S_DOUT_PIN,
-    .data_in_num = I2S_PIN_NO_CHANGE
-  };
-
-  esp_err_t e = i2s_driver_install(I2S_NUM_0, &tx_cfg, 0, NULL);
-  if (e != ESP_OK) {
-    Serial.printf("❌ [PCM] TX 驱动安装失败: %s\n", esp_err_to_name(e));
-    restorePlaybackI2S();
-    return false;
-  }
-  i2s_set_pin(I2S_NUM_0, &tx_pin);
+  installTxPlay(16000);   // 卸载现有 + 装 TX 16k + ES8311 DAC 16k + 功放使能
   _pcm_playing = true;
   is_playing = false; // 与 audioStream 的 is_playing 区分
   Serial.println("🔊 [PCM] 播放驱动就绪 (16k stereo), 等待下行音频...");
@@ -755,14 +781,7 @@ void ESP32Audio::feedPcm(const uint8_t* data, size_t len) {
 void ESP32Audio::stopPcmPlayback() {
   if (!_pcm_playing) return;
   _pcm_playing = false;
-  i2s_driver_uninstall(I2S_NUM_0);
-  vTaskDelay(pdMS_TO_TICKS(50));
-  restorePlaybackI2S(); // 恢复 Audio 库的引脚配置 (下次 MP3 播放 connecttohost 会重装驱动)
-
-  // ES8311 恢复 44.1k 播放模式
-  if (s_es8311_inited && s_es8311_handle) {
-    es8311_sample_frequency_config(s_es8311_handle, 44100 * 256, 44100);
-    es8311_voice_volume_set(s_es8311_handle, 85, NULL);
-  }
-  Serial.println("🔊 [PCM] 播放停止, 已恢复播放模式");
+  // 恢复 RX(麦克风)空闲基线 (ES8311 mic + 静音功放), 让唤醒词引擎继续监听
+  restoreIdleRxMic();
+  Serial.println("🔊 [PCM] 播放停止, 已恢复 RX(麦克风)基线");
 }

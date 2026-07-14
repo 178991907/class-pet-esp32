@@ -8,10 +8,16 @@
 #include "DeviceStateMachine.h"
 #include "Config.h"
 #include "ApiClient.h"
+#include "Network.h"
+#include "DeviceSettings.h"
+#include "AudioHAL.h"
 #include <SD_MMC.h>
 #include <esp_heap_caps.h>
 #include <vector>
+#include <ArduinoJson.h>
 #include "cjk16_bin.h"   // 中文字库 (GB2312) 已编译进固件, 450KB
+#include "time76_bin.h"  // 待机时钟时间高清字体 (76px ASCII 数字 + 冒号)
+#include "date40_bin.h"  // 待机日期/星期高清字体 (40px CJK + 空格)
 
 // 中文字库直接编译进固件 (tools/fonts/cjk16.bin -> cjk16_bin.c), 运行时通过
 // lv_binfont_create_from_buffer() 从内存缓冲区加载。彻底绕开 TF 卡 / HTTP 下载,
@@ -19,6 +25,13 @@
 // (之前误判 "3MB 分区放不下" 是因为按 3.1MB 的 C 数组估算; 实际 bin 字体仅 450KB,
 //  固件 1.76MB + 450KB = 2.2MB 远低于 huge_app 分区 3MB 上限。)
 static const lv_font_t* g_cjk_font = nullptr;
+
+// 待机时钟专用字体 (time76 用于时间, date40 用于日期)
+static lv_font_t* g_standby_time_font = nullptr;
+static lv_font_t* g_standby_date_font = nullptr;
+
+// 息屏状态标志, 定义在 ClassPetDevice.ino
+extern bool g_screen_off;
 
 // LVGL 9 的 binfont 加载器/内存文件系统未通过 lvgl.h 导出, 这里直接声明其 C 链接原型
 extern "C" {
@@ -132,6 +145,24 @@ static void loadCjkFontFromSD() {
     }
 }
 
+// 加载待机/菜单用高清字体 (time76 数字 + date40 日期/星期)
+static void loadStandbyFonts() {
+    if (!g_standby_time_font) {
+        DEBUG_PRINTF("📝 [字体] 加载待机时间字体 time76 (%u 字节)\n", time76_bin_len);
+        g_standby_time_font = lv_binfont_create_from_buffer((void*)time76_bin, (uint32_t)time76_bin_len);
+        if (!g_standby_time_font) {
+            DEBUG_PRINTLN("⚠️ [字体] time76 加载失败, 回退到 Montserrat 48");
+        }
+    }
+    if (!g_standby_date_font) {
+        DEBUG_PRINTF("📝 [字体] 加载待机日期字体 date40 (%u 字节)\n", date40_bin_len);
+        g_standby_date_font = lv_binfont_create_from_buffer((void*)date40_bin, (uint32_t)date40_bin_len);
+        if (!g_standby_date_font) {
+            DEBUG_PRINTLN("⚠️ [字体] date40 加载失败, 回退到默认 CJK 16");
+        }
+    }
+}
+
 // 字库下载完成后由 DeviceStateMachine 调用: 重新从 SD 加载并刷新所有中文标签
 void ClassPetUI::reloadCjkFont() {
     loadCjkFontFromSD();  // 若 SD 已有 cjk16.bin (刚下载完), 会重建 g_cjk_font
@@ -162,7 +193,30 @@ static void btn_tomato_cb(lv_event_t* e) {
 }
 
 static void btn_voice_cb(lv_event_t* e) {
+  LV_UNUSED(e);
+  // 语音会话进行中(录音/识别/播放)时直接忽略, 不排队, 防止退出后残留事件触发重复倒计时
+  if (DeviceStateMachine::getInstance().isVoiceSessionActive()) {
+    return;
+  }
+  static uint32_t last_voice_click = 0;
+  uint32_t now = millis();
+  if (now - last_voice_click < 600) {
+    return; // 600ms 内去抖, 避免重复触发
+  }
+  last_voice_click = now;
   DeviceStateMachine::getInstance().postEvent(EVENT_VOICE_START);
+}
+
+// 语音覆盖层上的"结束录音"按钮回调
+static void voice_overlay_stop_cb(lv_event_t* e) {
+  LV_UNUSED(e);
+  static uint32_t last_stop_click = 0;
+  uint32_t now = millis();
+  if (now - last_stop_click < 600) {
+    return;
+  }
+  last_stop_click = now;
+  DeviceStateMachine::getInstance().postEvent(EVENT_VOICE_RECORD_DONE);
 }
 
 static void btn_tomato_pause_cb(lv_event_t* e) {
@@ -180,6 +234,7 @@ void ClassPetUI::init() {
   lv_fs_memfs_init();
   lv_sd_fs_init();       // 直接通过 SD 卡加载字库 (比 MEMFS 更可靠)
   loadCjkFontFromSD();
+  loadStandbyFonts();    // 加载待机/菜单高清字体
 
   // 1. 初始化四个独立页面
   _scr_normal = lv_obj_create(NULL);
@@ -188,10 +243,16 @@ void ClassPetUI::init() {
   _scr_processing = lv_obj_create(NULL);
   _scr_menu = lv_obj_create(NULL);
   _scr_standby = lv_obj_create(NULL);
+  _scr_settings = lv_obj_create(NULL);
+  _scr_calendar = lv_obj_create(NULL);
+  _scr_list = lv_obj_create(NULL);
+  _scr_alarm = lv_obj_create(NULL);
+  _scr_owner = lv_obj_create(NULL);
   
   // 2. 配置背景样式
-  lv_obj_t* screens[] = { _scr_normal, _scr_diag, _scr_tomato, _scr_processing, _scr_menu, _scr_standby };
-  for (int i = 0; i < 6; i++) {
+  lv_obj_t* screens[] = { _scr_normal, _scr_diag, _scr_tomato, _scr_processing, _scr_menu, _scr_standby,
+                          _scr_settings, _scr_calendar, _scr_list, _scr_alarm, _scr_owner };
+  for (int i = 0; i < 11; i++) {
     lv_obj_set_style_bg_color(screens[i], LV_COLOR_BG, 0);
     lv_obj_set_style_bg_opa(screens[i], LV_OPA_COVER, 0);
   }
@@ -203,6 +264,11 @@ void ClassPetUI::init() {
   initProcessingScreen();
   initMenuScreen();
   initStandbyScreen();
+  initSettingsScreen();
+  initCalendarScreen();
+  initListScreen();
+  initAlarmScreen();
+  initOwnerScreen();
   
   // 4. 创建系统全局浮空 Toast 气泡 (挂载在系统层，换页不消失)
   _toast_container = lv_obj_create(lv_layer_sys());
@@ -231,14 +297,22 @@ void ClassPetUI::init() {
 }
 
 void ClassPetUI::gesture_event_cb(lv_event_t* e) {
+  LV_UNUSED(e);
   lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_active());
   ClassPetUI& ui = ClassPetUI::getInstance();
   lv_obj_t* active_scr = lv_screen_active();
   
   if (dir == LV_DIR_TOP && active_scr == ui._scr_normal) {
     ui.loadScreen(ui._scr_menu);
-  } else if (dir == LV_DIR_BOTTOM && active_scr == ui._scr_menu) {
+  } else if (active_scr == ui._scr_menu) {
+    // 菜单页任意方向滑动手势返回主页
     ui.loadScreen(ui._scr_normal);
+  } else if (active_scr == ui._scr_standby) {
+    // 待机下任意滑动手势唤醒设备
+    g_screen_off = false;
+    LcdDisplay::getInstance().resetActivityTime();
+    LcdDisplay::getInstance().setBrightness(DeviceSettings::getBrightness());
+    ui.forceSwitchToNormal();
   }
 }
 
@@ -607,49 +681,98 @@ void ClassPetUI::initProcessingScreen() {
 }
 
 // ==========================================
-// 新增：初始化菜单界面 (ScreenMenu)
+// 新增：初始化菜单界面 (ScreenMenu) — 可滚动功能列表
 // ==========================================
 void ClassPetUI::initMenuScreen() {
   lv_obj_add_event_cb(_scr_menu, gesture_event_cb, LV_EVENT_GESTURE, NULL);
   lv_obj_clear_flag(_scr_menu, LV_OBJ_FLAG_SCROLLABLE);
 
   lv_obj_t* title = lv_label_create(_scr_menu);
-  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 30);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 6);
   lv_obj_set_style_text_color(title, LV_COLOR_TEXT, 0);
   setCjkFont(title, cjkFont(), 0);
   lv_label_set_text(title, "功能菜单");
 
-  lv_obj_t* btn_tomato = lv_button_create(_scr_menu);
-  lv_obj_set_size(btn_tomato, 200, 50);
-  lv_obj_align(btn_tomato, LV_ALIGN_CENTER, 0, -20);
-  lv_obj_set_style_bg_color(btn_tomato, LV_COLOR_PRIMARY, 0);
-  lv_obj_set_style_radius(btn_tomato, 25, 0);
-  lv_obj_add_event_cb(btn_tomato, btn_tomato_cb, LV_EVENT_CLICKED, NULL);
-  
-  lv_obj_t* lbl_t = lv_label_create(btn_tomato);
-  lv_label_set_text(lbl_t, "番茄时钟");
-  lv_obj_set_style_text_color(lbl_t, lv_color_hex(0xFFFFFF), 0);
-  setCjkFont(lbl_t, cjkFont(), 0);
-  lv_obj_center(lbl_t);
-  
-  lv_obj_t* btn_voice = lv_button_create(_scr_menu);
-  lv_obj_set_size(btn_voice, 200, 50);
-  lv_obj_align(btn_voice, LV_ALIGN_CENTER, 0, 50);
-  lv_obj_set_style_bg_color(btn_voice, LV_COLOR_SUCCESS, 0);
-  lv_obj_set_style_radius(btn_voice, 25, 0);
-  lv_obj_add_event_cb(btn_voice, btn_voice_cb, LV_EVENT_CLICKED, NULL);
-  
-  lv_obj_t* lbl_v = lv_label_create(btn_voice);
-  lv_label_set_text(lbl_v, "语音申报");
-  lv_obj_set_style_text_color(lbl_v, lv_color_hex(0xFFFFFF), 0);
-  setCjkFont(lbl_v, cjkFont(), 0);
-  lv_obj_center(lbl_v);
+  // 左上角返回按钮
+  lv_obj_t* btn_back = lv_btn_create(_scr_menu);
+  lv_obj_set_size(btn_back, 44, 28);
+  lv_obj_align(btn_back, LV_ALIGN_TOP_LEFT, 6, 4);
+  lv_obj_set_style_bg_color(btn_back, lv_color_hex(0xE2E8F0), 0);
+  lv_obj_set_style_bg_opa(btn_back, LV_OPA_COVER, 0);
+  lv_obj_set_style_radius(btn_back, 8, 0);
+  lv_obj_set_style_border_width(btn_back, 0, 0);
+  lv_obj_set_style_shadow_width(btn_back, 0, 0);
+  lv_obj_add_event_cb(btn_back, [](lv_event_t* e){
+    LV_UNUSED(e);
+    ClassPetUI::getInstance().loadScreen(ClassPetUI::getInstance()._scr_normal);
+  }, LV_EVENT_CLICKED, NULL);
+  lv_obj_t* lbl_back = lv_label_create(btn_back);
+  lv_label_set_text(lbl_back, LV_SYMBOL_LEFT);
+  lv_obj_set_style_text_font(lbl_back, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(lbl_back, LV_COLOR_TEXT, 0);
+  lv_obj_center(lbl_back);
 
-  lv_obj_t* hint = lv_label_create(_scr_menu);
-  lv_obj_align(hint, LV_ALIGN_TOP_MID, 0, 5);
-  lv_obj_set_style_text_color(hint, LV_COLOR_TEXT_MUTED, 0);
-  setCjkFont(hint, cjkFont(), 0);
-  lv_label_set_text(hint, "v 下滑返回主页");
+  // 手机 APP 风格图标网格: 3 列, 适配横屏 320x240, 一页放下所有功能
+  lv_obj_t* grid = lv_obj_create(_scr_menu);
+  lv_obj_set_size(grid, 318, 206);
+  lv_obj_align(grid, LV_ALIGN_TOP_MID, 0, 32);
+  lv_obj_set_style_bg_opa(grid, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(grid, 0, 0);
+  lv_obj_set_style_pad_all(grid, 4, 0);
+  lv_obj_set_style_pad_row(grid, 6, 0);
+  lv_obj_set_style_pad_column(grid, 8, 0);
+  lv_obj_set_flex_flow(grid, LV_FLEX_FLOW_ROW_WRAP);
+  lv_obj_set_flex_align(grid, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+  lv_obj_clear_flag(grid, LV_OBJ_FLAG_SCROLLABLE);
+
+  // 帮助函数：创建一个 APP 风格图标磁贴 (FontAwesome 符号 + 中文标签)
+  auto mkTile = [&](const char* label, const char* icon, uint32_t color, void (*cb)(lv_event_t*)) {
+    lv_obj_t* tile = lv_obj_create(grid);
+    lv_obj_set_size(tile, 98, 62);
+    lv_obj_set_style_bg_color(tile, lv_color_hex(color), 0);
+    lv_obj_set_style_bg_opa(tile, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(tile, 12, 0);
+    lv_obj_set_style_border_width(tile, 0, 0);
+    lv_obj_set_style_pad_all(tile, 0, 0);
+    lv_obj_set_style_shadow_width(tile, 6, 0);
+    lv_obj_set_style_shadow_color(tile, lv_color_hex(color), 0);
+    lv_obj_set_style_shadow_opa(tile, 70, 0);
+    lv_obj_set_style_shadow_ofs_y(tile, 2, 0);
+    lv_obj_clear_flag(tile, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(tile, cb, LV_EVENT_CLICKED, NULL);
+
+    // 图标 (20px FontAwesome 符号, 白色, 居中偏上)
+    lv_obj_t* icon_lbl = lv_label_create(tile);
+    lv_label_set_text(icon_lbl, icon);
+    lv_obj_set_style_text_color(icon_lbl, lv_color_white(), 0);
+    lv_obj_set_style_text_font(icon_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_align(icon_lbl, LV_ALIGN_CENTER, 0, -8);
+
+    // 短标签 (16px CJK, 2 字, 居中偏下)
+    lv_obj_t* l = lv_label_create(tile);
+    lv_label_set_text(l, label);
+    lv_obj_set_style_text_color(l, lv_color_white(), 0);
+    setCjkFont(l, cjkFont(), 0);
+    lv_obj_align(l, LV_ALIGN_CENTER, 0, 10);
+    return tile;
+  };
+
+  mkTile("番茄", LV_SYMBOL_PAUSE, 0xFF9F43, btn_tomato_cb);
+  mkTile("语音", LV_SYMBOL_AUDIO, 0x26DE81, btn_voice_cb);
+  mkTile("日历", LV_SYMBOL_EDIT, 0x4F8DFD, [](lv_event_t* e){ ClassPetUI::getInstance().showCalendar(); });
+  mkTile("清单", LV_SYMBOL_LIST, 0x9B59F6, [](lv_event_t* e){ ClassPetUI::getInstance().showList(); });
+  mkTile("闹铃", LV_SYMBOL_BELL, 0xE67E22, [](lv_event_t* e){ ClassPetUI::getInstance().showAlarm(); });
+  mkTile("记忆", LV_SYMBOL_SAVE, 0xEC407A, [](lv_event_t* e){ ClassPetUI::getInstance().showOwnerMemory(); });
+  mkTile("设置", LV_SYMBOL_SETTINGS, 0x64748B, [](lv_event_t* e){ ClassPetUI::getInstance().showSettings(); });
+}
+
+// 待机屏幕点击/按压唤醒回调
+static void standby_wake_event_cb(lv_event_t* e) {
+  LV_UNUSED(e);
+  g_screen_off = false;
+  LcdDisplay::getInstance().resetActivityTime();
+  LcdDisplay::getInstance().setBrightness(DeviceSettings::getBrightness());
+  ClassPetUI::getInstance().forceSwitchToNormal();
 }
 
 // ==========================================
@@ -657,25 +780,34 @@ void ClassPetUI::initMenuScreen() {
 // ==========================================
 void ClassPetUI::initStandbyScreen() {
   lv_obj_add_event_cb(_scr_standby, gesture_event_cb, LV_EVENT_GESTURE, NULL);
+  // 点击/按压也能唤醒, 防止用户单纯点击无法退出待机
+  lv_obj_add_event_cb(_scr_standby, standby_wake_event_cb, LV_EVENT_CLICKED, NULL);
+  lv_obj_add_event_cb(_scr_standby, standby_wake_event_cb, LV_EVENT_PRESSED, NULL);
+  lv_obj_add_event_cb(_scr_standby, standby_wake_event_cb, LV_EVENT_LONG_PRESSED, NULL);
+  lv_obj_clear_flag(_scr_standby, LV_OBJ_FLAG_SCROLLABLE);
 
   // 纯黑背景省电 + 防止闪眼
   lv_obj_set_style_bg_color(_scr_standby, lv_color_black(), 0);
+  lv_obj_set_style_bg_opa(_scr_standby, LV_OPA_COVER, 0); // 确保不透明, 遮住下方内容
 
+  // 时间: 76px 原生高清 ASCII 字体 (不缩放, 高清不模糊)
   _lbl_standby_time = lv_label_create(_scr_standby);
-  lv_obj_align(_lbl_standby_time, LV_ALIGN_CENTER, 0, -10);
   lv_obj_set_style_text_color(_lbl_standby_time, lv_color_white(), 0);
-  setCjkFont(_lbl_standby_time, &lv_font_montserrat_24, 0);
-  lv_obj_set_style_transform_scale(_lbl_standby_time, 512, 0); // 放大2倍 (256 * 2)
-  lv_obj_add_flag(_lbl_standby_time, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
+  lv_obj_set_style_text_font(_lbl_standby_time, g_standby_time_font ? g_standby_time_font : &lv_font_montserrat_48, 0);
   lv_label_set_text(_lbl_standby_time, "00:00");
+  lv_obj_align(_lbl_standby_time, LV_ALIGN_CENTER, 0, -22);
+  // 时间标签也接收点击事件, 防止点击时间区域不唤醒
+  lv_obj_add_event_cb(_lbl_standby_time, standby_wake_event_cb, LV_EVENT_CLICKED, NULL);
+  lv_obj_add_event_cb(_lbl_standby_time, standby_wake_event_cb, LV_EVENT_PRESSED, NULL);
 
+  // 日期: 40px 原生高清 CJK 字体
   _lbl_standby_date = lv_label_create(_scr_standby);
-  lv_obj_align(_lbl_standby_date, LV_ALIGN_CENTER, 0, 15);
   lv_obj_set_style_text_color(_lbl_standby_date, lv_color_hex(0xcccccc), 0);
-  setCjkFont(_lbl_standby_date, cjkFont(), 0);
-  lv_obj_set_style_transform_scale(_lbl_standby_date, 512, 0); // 放大2倍
-  lv_obj_add_flag(_lbl_standby_date, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
+  lv_obj_set_style_text_font(_lbl_standby_date, g_standby_date_font ? g_standby_date_font : cjkFont(), 0);
   lv_label_set_text(_lbl_standby_date, "1月1日 星期一");
+  lv_obj_align(_lbl_standby_date, LV_ALIGN_CENTER, 0, 48);
+  lv_obj_add_event_cb(_lbl_standby_date, standby_wake_event_cb, LV_EVENT_CLICKED, NULL);
+  lv_obj_add_event_cb(_lbl_standby_date, standby_wake_event_cb, LV_EVENT_PRESSED, NULL);
 }
 
 // ==========================================
@@ -712,9 +844,11 @@ void ClassPetUI::showNormalScreen(const String& name, int points, int level, int
     lv_bar_set_value(_bar_normal_exp, pct, LV_ANIM_ON);
   }
   
-  // 防止在菜单页、待机页、番茄钟页时，被后台数据刷新强制拉回主页（闪退现象）
+  // 防止在菜单页、待机页、番茄钟页、功能页时，被后台数据刷新强制拉回主页（闪退现象）
   lv_obj_t* active_scr = lv_screen_active();
-  if (active_scr != _scr_menu && active_scr != _scr_standby && active_scr != _scr_tomato) {
+  if (active_scr != _scr_menu && active_scr != _scr_standby && active_scr != _scr_tomato &&
+      active_scr != _scr_settings && active_scr != _scr_calendar && active_scr != _scr_list &&
+      active_scr != _scr_alarm && active_scr != _scr_owner) {
     loadScreen(_scr_normal);
   }
 }
@@ -815,10 +949,10 @@ void ClassPetUI::showProcessingScreen(const String& statusText) {
 }
 
 void ClassPetUI::showRecordingScreen(int volumeDb) {
-  lv_label_set_text(_lbl_proc_text, "🎙️ 正在录制您的语音...\n请说话 (点击屏幕停止)");
+  lv_label_set_text(_lbl_proc_text, "正在录制您的语音...\n请说话 (点击屏幕停止)");
   lv_obj_remove_flag(_bar_rec_vol, LV_OBJ_FLAG_HIDDEN); // 显示波形条
   lv_bar_set_value(_bar_rec_vol, volumeDb, LV_ANIM_OFF);
-  
+
   loadScreen(_scr_processing);
 }
 
@@ -840,15 +974,13 @@ void ClassPetUI::enterVoiceOverlay(const String& title) {
   _voice_overlay = lv_obj_create(parent);
   lv_obj_set_size(_voice_overlay, 240, 320);
   lv_obj_set_pos(_voice_overlay, 0, 0);
-  lv_obj_set_style_bg_opa(_voice_overlay, LV_OPA_TRANSP, 0); // 透明, 露出底层宠物
+  lv_obj_set_style_bg_color(_voice_overlay, LV_COLOR_CARD_BG, 0); // 白底，遮住下层菜单
+  lv_obj_set_style_bg_opa(_voice_overlay, LV_OPA_COVER, 0);       // 不透明，避免按钮透底
   lv_obj_set_style_border_width(_voice_overlay, 0, 0);
   lv_obj_set_style_pad_all(_voice_overlay, 0, 0);
   lv_obj_clear_flag(_voice_overlay, LV_OBJ_FLAG_SCROLLABLE);
-  // 点击屏幕 = 停止录音 (与旧 processing 屏一致)
+  // 覆盖层 clickable 用于阻挡触摸穿透到底层菜单, 停止操作请用显式按钮
   lv_obj_add_flag(_voice_overlay, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_add_event_cb(_voice_overlay, [](lv_event_t* e) {
-    DeviceStateMachine::getInstance().postEvent(EVENT_VOICE_RECORD_DONE);
-  }, LV_EVENT_CLICKED, NULL);
 
   // 顶部状态标题
   _voice_title = lv_label_create(_voice_overlay);
@@ -860,20 +992,53 @@ void ClassPetUI::enterVoiceOverlay(const String& title) {
   lv_label_set_long_mode(_voice_title, LV_LABEL_LONG_WRAP);
   lv_label_set_text(_voice_title, title.c_str());
 
+  // 倒计时提示(录音阶段显示, 识别阶段用于"识别中...")
+  _voice_countdown = lv_label_create(_voice_overlay);
+  lv_obj_set_width(_voice_countdown, 220);
+  lv_obj_align(_voice_countdown, LV_ALIGN_TOP_MID, 0, 50);
+  lv_obj_set_style_text_color(_voice_countdown, LV_COLOR_TEXT_MUTED, 0);
+  lv_obj_set_style_text_align(_voice_countdown, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_set_style_text_font(_voice_countdown, cjkFont(), 0);
+  lv_label_set_text(_voice_countdown, "准备...");
+
   // 声波/音量条
   _voice_level = lv_bar_create(_voice_overlay);
   lv_obj_set_size(_voice_level, 200, 14);
-  lv_obj_align(_voice_level, LV_ALIGN_TOP_MID, 0, 58);
+  lv_obj_align(_voice_level, LV_ALIGN_TOP_MID, 0, 78);
   lv_obj_set_style_bg_color(_voice_level, lv_color_hex(0x1E293B), 0);
   lv_obj_set_style_bg_color(_voice_level, LV_COLOR_PRIMARY, LV_PART_INDICATOR);
   lv_obj_set_style_radius(_voice_level, 7, 0);
   lv_bar_set_range(_voice_level, 0, 100);
   lv_bar_set_value(_voice_level, 0, LV_ANIM_OFF);
 
+  // 识别阶段显示的 spinner(默认隐藏)
+  _voice_processing_spinner = lv_spinner_create(_voice_overlay);
+  lv_obj_set_size(_voice_processing_spinner, 50, 50);
+  lv_obj_align(_voice_processing_spinner, LV_ALIGN_TOP_MID, 0, 105);
+  lv_obj_set_style_arc_color(_voice_processing_spinner, LV_COLOR_PRIMARY, LV_PART_INDICATOR);
+  lv_obj_set_style_arc_color(_voice_processing_spinner, lv_color_hex(0x1E293B), LV_PART_MAIN);
+  lv_obj_add_flag(_voice_processing_spinner, LV_OBJ_FLAG_HIDDEN);
+
+  // 显式的"结束录音"大按钮(替代不明显的"点击屏幕停止")
+  _voice_stop_btn = lv_button_create(_voice_overlay);
+  lv_obj_set_size(_voice_stop_btn, 180, 50);
+  lv_obj_align(_voice_stop_btn, LV_ALIGN_BOTTOM_MID, 0, -28);
+  lv_obj_set_style_bg_color(_voice_stop_btn, LV_COLOR_DANGER, 0);
+  lv_obj_set_style_bg_opa(_voice_stop_btn, LV_OPA_COVER, 0);
+  lv_obj_set_style_radius(_voice_stop_btn, 25, 0);
+  lv_obj_add_event_cb(_voice_stop_btn, voice_overlay_stop_cb, LV_EVENT_CLICKED, NULL);
+  lv_obj_clear_flag(_voice_stop_btn, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t* lbl_stop = lv_label_create(_voice_stop_btn);
+  lv_obj_set_style_text_color(lbl_stop, lv_color_white(), 0);
+  lv_obj_set_style_text_font(lbl_stop, cjkFont(), 0);
+  lv_label_set_text(lbl_stop, "结束录音");
+  lv_obj_center(lbl_stop);
+
   // "你说" 字幕气泡
   _voice_you = lv_label_create(_voice_overlay);
   lv_obj_set_width(_voice_you, 224);
-  lv_obj_align(_voice_you, LV_ALIGN_BOTTOM_MID, 0, -74);
+  lv_obj_align(_voice_you, LV_ALIGN_BOTTOM_MID, 0, -90);
   lv_obj_set_style_text_color(_voice_you, LV_COLOR_TEXT, 0);
   lv_obj_set_style_text_align(_voice_you, LV_TEXT_ALIGN_LEFT, 0);
   lv_obj_set_style_text_font(_voice_you, cjkFont(), 0);
@@ -887,7 +1052,7 @@ void ClassPetUI::enterVoiceOverlay(const String& title) {
   // "宠物说" 字幕气泡
   _voice_pet = lv_label_create(_voice_overlay);
   lv_obj_set_width(_voice_pet, 224);
-  lv_obj_align(_voice_pet, LV_ALIGN_BOTTOM_MID, 0, -10);
+  lv_obj_align(_voice_pet, LV_ALIGN_BOTTOM_MID, 0, -20);
   lv_obj_set_style_text_color(_voice_pet, lv_color_hex(0x1E293B), 0);
   lv_obj_set_style_text_align(_voice_pet, LV_TEXT_ALIGN_LEFT, 0);
   lv_obj_set_style_text_font(_voice_pet, cjkFont(), 0);
@@ -907,15 +1072,42 @@ void ClassPetUI::setVoiceOverlayLevel(int db) {
   if (_voice_level) lv_bar_set_value(_voice_level, db, LV_ANIM_OFF);
 }
 
+void ClassPetUI::setVoiceOverlayCountdown(int seconds) {
+  if (_voice_countdown) {
+    String s = "剩余 " + String(seconds) + " 秒";
+    lv_label_set_text(_voice_countdown, s.c_str());
+  }
+}
+
+void ClassPetUI::setVoiceOverlayProcessing(bool processing) {
+  if (processing) {
+    if (_voice_level) lv_obj_add_flag(_voice_level, LV_OBJ_FLAG_HIDDEN);
+    if (_voice_stop_btn) lv_obj_add_flag(_voice_stop_btn, LV_OBJ_FLAG_HIDDEN);
+    if (_voice_countdown) {
+      lv_obj_set_style_text_color(_voice_countdown, LV_COLOR_PRIMARY, 0);
+      lv_label_set_text(_voice_countdown, "识别中...");
+    }
+    if (_voice_processing_spinner) lv_obj_remove_flag(_voice_processing_spinner, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    if (_voice_level) lv_obj_remove_flag(_voice_level, LV_OBJ_FLAG_HIDDEN);
+    if (_voice_stop_btn) lv_obj_remove_flag(_voice_stop_btn, LV_OBJ_FLAG_HIDDEN);
+    if (_voice_countdown) {
+      lv_obj_set_style_text_color(_voice_countdown, LV_COLOR_TEXT_MUTED, 0);
+      lv_label_set_text(_voice_countdown, "准备...");
+    }
+    if (_voice_processing_spinner) lv_obj_add_flag(_voice_processing_spinner, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
 void ClassPetUI::setVoiceOverlayCaption(bool isUser, const String& text) {
   if (isUser) {
     if (_voice_you) {
-      String s = "🗣 你说: " + text;
+      String s = "你说: " + text;
       lv_label_set_text(_voice_you, s.c_str());
     }
   } else {
     if (_voice_pet) {
-      String s = "🐾 宠物: " + text;
+      String s = "宠物: " + text;
       lv_label_set_text(_voice_pet, s.c_str());
     }
   }
@@ -926,7 +1118,10 @@ void ClassPetUI::exitVoiceOverlay() {
     lv_obj_del(_voice_overlay);
     _voice_overlay = nullptr;
     _voice_title = nullptr;
+    _voice_countdown = nullptr;
     _voice_level = nullptr;
+    _voice_stop_btn = nullptr;
+    _voice_processing_spinner = nullptr;
     _voice_you = nullptr;
     _voice_pet = nullptr;
   }
@@ -1029,6 +1224,522 @@ void ClassPetUI::updateStatusBar(bool isOnline, const String& wifiName, int batt
         lv_obj_set_style_bg_color(_bar_battery, LV_COLOR_DANGER, LV_PART_INDICATOR);
       } else {
         lv_obj_set_style_bg_color(_bar_battery, LV_COLOR_SUCCESS, LV_PART_INDICATOR);
+      }
+    }
+  }
+}
+
+// ==========================================
+// 新增：功能屏通用列表辅助
+// ==========================================
+extern volatile uint8_t g_featureReq;  // 定义在 ClassPetDevice.ino
+extern AudioHAL* audio;                 // 定义在 ClassPetDevice.ino
+
+void ClassPetUI::clearList(lv_obj_t* scroll) {
+  if (!scroll) return;
+  lv_obj_clean(scroll);
+}
+
+lv_obj_t* ClassPetUI::addListRow(lv_obj_t* scroll, const String& title, const String& sub, bool dim) {
+  if (!scroll) return nullptr;
+  lv_obj_t* row = lv_obj_create(scroll);
+  lv_obj_set_width(row, 290);
+  lv_obj_set_style_bg_color(row, LV_COLOR_CARD_BG, 0);
+  lv_obj_set_style_border_color(row, LV_COLOR_BORDER, 0);
+  lv_obj_set_style_border_width(row, 1, 0);
+  lv_obj_set_style_radius(row, 8, 0);
+  lv_obj_set_style_pad_all(row, 6, 0);
+  lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_flex_flow(row, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+
+  lv_obj_t* t = lv_label_create(row);
+  lv_obj_set_width(t, 278);
+  lv_label_set_long_mode(t, LV_LABEL_LONG_WRAP);
+  setCjkFont(t, cjkFont(), 0);
+  lv_label_set_text(t, title.c_str());
+  lv_obj_set_style_text_color(t, dim ? LV_COLOR_TEXT_MUTED : LV_COLOR_TEXT, 0);
+
+  if (sub.length()) {
+    lv_obj_t* s = lv_label_create(row);
+    lv_obj_set_width(s, 278);
+    lv_label_set_long_mode(s, LV_LABEL_LONG_WRAP);
+    setCjkFont(s, cjkFont(), 0);
+    lv_label_set_text(s, sub.c_str());
+    lv_obj_set_style_text_color(s, LV_COLOR_TEXT_MUTED, 0);
+  }
+  return row;
+}
+
+// ==========================================
+// 设置屏 (Settings)
+// ==========================================
+void ClassPetUI::initSettingsScreen() {
+  lv_obj_t* title = lv_label_create(_scr_settings);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 6);
+  lv_obj_set_style_text_color(title, LV_COLOR_TEXT, 0);
+  setCjkFont(title, cjkFont(), 0);
+  lv_label_set_text(title, "设备设置");
+
+  // 左上角返回按钮
+  lv_obj_t* btn_back = lv_button_create(_scr_settings);
+  lv_obj_set_size(btn_back, 44, 28);
+  lv_obj_align(btn_back, LV_ALIGN_TOP_LEFT, 6, 4);
+  lv_obj_set_style_bg_color(btn_back, lv_color_hex(0x475569), 0);
+  lv_obj_set_style_bg_opa(btn_back, LV_OPA_COVER, 0);
+  lv_obj_set_style_radius(btn_back, 8, 0);
+  lv_obj_add_event_cb(btn_back, [](lv_event_t* e){ ClassPetUI::getInstance().loadScreen(ClassPetUI::getInstance()._scr_menu); }, LV_EVENT_CLICKED, NULL);
+  lv_obj_t* lbl_b = lv_label_create(btn_back);
+  lv_label_set_text(lbl_b, LV_SYMBOL_LEFT);
+  lv_obj_set_style_text_font(lbl_b, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(lbl_b, lv_color_white(), 0);
+  lv_obj_center(lbl_b);
+
+  // 设备信息只读卡片（与调整项分离，避免重叠）
+  lv_obj_t* info_card = lv_obj_create(_scr_settings);
+  lv_obj_set_size(info_card, 308, 56);
+  lv_obj_align(info_card, LV_ALIGN_TOP_MID, 0, 32);
+  lv_obj_set_style_bg_color(info_card, lv_color_hex(0xF1F5F9), 0);
+  lv_obj_set_style_bg_opa(info_card, LV_OPA_COVER, 0);
+  lv_obj_set_style_radius(info_card, 10, 0);
+  lv_obj_set_style_border_width(info_card, 0, 0);
+  lv_obj_set_style_pad_all(info_card, 6, 0);
+  lv_obj_set_style_pad_row(info_card, 4, 0);
+  lv_obj_set_flex_flow(info_card, LV_FLEX_FLOW_COLUMN);
+  lv_obj_clear_flag(info_card, LV_OBJ_FLAG_SCROLLABLE);
+
+  _lbl_machine_code = lv_label_create(info_card);
+  lv_obj_set_width(_lbl_machine_code, 290);
+  lv_obj_set_style_text_color(_lbl_machine_code, LV_COLOR_TEXT_MUTED, 0);
+  setCjkFont(_lbl_machine_code, cjkFont(), 0);
+  lv_label_set_text(_lbl_machine_code, "机器码: -");
+
+  _lbl_dev_status = lv_label_create(info_card);
+  lv_obj_set_width(_lbl_dev_status, 290);
+  lv_obj_set_style_text_color(_lbl_dev_status, LV_COLOR_TEXT_MUTED, 0);
+  setCjkFont(_lbl_dev_status, cjkFont(), 0);
+  lv_label_set_text(_lbl_dev_status, "状态: -");
+
+  _lbl_fw_info = lv_label_create(info_card);
+  lv_obj_set_width(_lbl_fw_info, 290);
+  lv_obj_set_style_text_color(_lbl_fw_info, LV_COLOR_TEXT_MUTED, 0);
+  setCjkFont(_lbl_fw_info, cjkFont(), 0);
+  lv_label_set_text(_lbl_fw_info, "固件: -");
+
+  _lbl_sys_info = lv_label_create(info_card);
+  lv_obj_set_width(_lbl_sys_info, 290);
+  lv_obj_set_style_text_color(_lbl_sys_info, LV_COLOR_TEXT_MUTED, 0);
+  setCjkFont(_lbl_sys_info, cjkFont(), 0);
+  lv_label_set_text(_lbl_sys_info, "系统: -");
+
+  // 可滚动设置区（音量/亮度/待机/息屏）
+  lv_obj_t* cont = lv_obj_create(_scr_settings);
+  lv_obj_set_size(cont, 308, 144);
+  lv_obj_align(cont, LV_ALIGN_TOP_MID, 0, 92);
+  lv_obj_set_style_bg_opa(cont, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(cont, 0, 0);
+  lv_obj_set_style_pad_all(cont, 4, 0);
+  lv_obj_set_style_pad_row(cont, 6, 0);
+  lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
+  lv_obj_add_flag(cont, LV_OBJ_FLAG_SCROLLABLE);
+
+  auto mkSlider = [&](const char* label, int min, int max, int val, lv_obj_t*& slider, lv_obj_t*& valLbl) {
+    lv_obj_t* box = lv_obj_create(cont);
+    lv_obj_set_width(box, 296);
+    lv_obj_set_style_bg_opa(box, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(box, 0, 0);
+    lv_obj_set_style_pad_all(box, 4, 0);
+    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(box, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+
+    lv_obj_t* top = lv_obj_create(box);
+    lv_obj_set_width(top, 280);
+    lv_obj_set_style_bg_opa(top, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(top, 0, 0);
+    lv_obj_set_style_pad_all(top, 0, 0);
+    lv_obj_clear_flag(top, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(top, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(top, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    lv_obj_t* l = lv_label_create(top);
+    lv_obj_set_style_text_color(l, LV_COLOR_TEXT, 0);
+    setCjkFont(l, cjkFont(), 0);
+    lv_label_set_text(l, label);
+
+    valLbl = lv_label_create(top);
+    lv_obj_set_style_text_color(valLbl, LV_COLOR_PRIMARY, 0);
+    setCjkFont(valLbl, cjkFont(), 0);
+    lv_label_set_text_fmt(valLbl, "%d", val);
+
+    slider = lv_slider_create(box);
+    lv_obj_set_size(slider, 280, 16);
+    lv_slider_set_range(slider, min, max);
+    lv_slider_set_value(slider, val, LV_ANIM_OFF);
+    lv_obj_set_style_radius(slider, 8, LV_PART_MAIN);
+    lv_obj_set_style_radius(slider, 8, LV_PART_INDICATOR);
+    return box;
+  };
+
+  mkSlider("音量", 0, 100, DeviceSettings::getVolume(), _slider_volume, _lbl_volume_val);
+  mkSlider("亮度", 0, 100, DeviceSettings::getBrightness(), _slider_brightness, _lbl_brightness_val);
+  mkSlider("待机(秒)", 0, 300, DeviceSettings::getStandbySeconds(), _slider_standby, _lbl_standby_val);
+  mkSlider("息屏(秒)", 0, 600, DeviceSettings::getScreenOffSeconds(), _slider_screenoff, _lbl_screenoff_val);
+
+  auto sliderCb = [](lv_event_t* e) {
+    lv_obj_t* slider = (lv_obj_t*)lv_event_get_target(e);
+    int v = lv_slider_get_value(slider);
+    ClassPetUI& ui = ClassPetUI::getInstance();
+    if (slider == ui._slider_volume) {
+      DeviceSettings::setVolume(v);
+      lv_label_set_text_fmt(ui._lbl_volume_val, "%d", v);
+      if (audio) audio->setVolume(v);
+    } else if (slider == ui._slider_brightness) {
+      DeviceSettings::setBrightness(v);
+      lv_label_set_text_fmt(ui._lbl_brightness_val, "%d", v);
+      LcdDisplay::getInstance().setBrightness(v);
+    } else if (slider == ui._slider_standby) {
+      DeviceSettings::setStandbySeconds(v);
+      lv_label_set_text_fmt(ui._lbl_standby_val, "%d", v);
+    } else if (slider == ui._slider_screenoff) {
+      DeviceSettings::setScreenOffSeconds(v);
+      lv_label_set_text_fmt(ui._lbl_screenoff_val, "%d", v);
+    }
+  };
+  lv_obj_add_event_cb(_slider_volume, sliderCb, LV_EVENT_VALUE_CHANGED, NULL);
+  lv_obj_add_event_cb(_slider_brightness, sliderCb, LV_EVENT_VALUE_CHANGED, NULL);
+  lv_obj_add_event_cb(_slider_standby, sliderCb, LV_EVENT_VALUE_CHANGED, NULL);
+  lv_obj_add_event_cb(_slider_screenoff, sliderCb, LV_EVENT_VALUE_CHANGED, NULL);
+}
+
+void ClassPetUI::showSettings() {
+  refreshSettingsInfo();
+  loadScreen(_scr_settings);
+}
+
+void ClassPetUI::refreshSettingsInfo() {
+  if (_lbl_machine_code) {
+    lv_label_set_text_fmt(_lbl_machine_code, "机器码: %s", Network::getMacAddress().c_str());
+  }
+  if (_lbl_dev_status) {
+    String s = Network::isConnected() ? ("在线 | " + Network::getLocalIP()) : "离线";
+    lv_label_set_text_fmt(_lbl_dev_status, "状态: %s", s.c_str());
+  }
+  if (_lbl_fw_info) {
+    lv_label_set_text_fmt(_lbl_fw_info, "固件: v%s", DeviceSettings::getFirmwareVersion().c_str());
+  }
+  if (_lbl_sys_info) {
+    char buf[64];
+    snprintf(buf, sizeof(buf), "系统: %s | 空闲 %uKB", ESP.getChipModel(), ESP.getFreeHeap()/1024);
+    lv_label_set_text(_lbl_sys_info, buf);
+  }
+}
+
+// ==========================================
+// 日历屏
+// ==========================================
+void ClassPetUI::initCalendarScreen() {
+  lv_obj_t* title = lv_label_create(_scr_calendar);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 6);
+  lv_obj_set_style_text_color(title, LV_COLOR_TEXT, 0);
+  setCjkFont(title, cjkFont(), 0);
+  lv_label_set_text(title, "我的日历");
+
+  _list_calendar = lv_obj_create(_scr_calendar);
+  lv_obj_set_size(_list_calendar, 300, 200);
+  lv_obj_align(_list_calendar, LV_ALIGN_TOP_MID, 0, 34);
+  lv_obj_set_style_bg_opa(_list_calendar, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(_list_calendar, 0, 0);
+  lv_obj_set_style_pad_all(_list_calendar, 4, 0);
+  lv_obj_set_style_pad_row(_list_calendar, 6, 0);
+  lv_obj_set_flex_flow(_list_calendar, LV_FLEX_FLOW_COLUMN);
+  lv_obj_add_flag(_list_calendar, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t* hint = lv_label_create(_scr_calendar);
+  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -4);
+  lv_obj_set_style_text_color(hint, LV_COLOR_TEXT_MUTED, 0);
+  setCjkFont(hint, cjkFont(), 0);
+  lv_label_set_text(hint, "可在网页后台或语音申报添加");
+
+  lv_obj_t* btn_back = lv_button_create(_scr_calendar);
+  lv_obj_set_size(btn_back, 70, 28);
+  lv_obj_align(btn_back, LV_ALIGN_TOP_LEFT, 8, 6);
+  lv_obj_set_style_bg_color(btn_back, lv_color_hex(0x475569), 0);
+  lv_obj_add_event_cb(btn_back, [](lv_event_t* e){ ClassPetUI::getInstance().loadScreen(ClassPetUI::getInstance()._scr_menu); }, LV_EVENT_CLICKED, NULL);
+  lv_obj_t* lbl_b = lv_label_create(btn_back); lv_label_set_text(lbl_b, "返回"); setCjkFont(lbl_b, cjkFont(), 0); lv_obj_center(lbl_b);
+
+  lv_obj_t* btn_ref = lv_button_create(_scr_calendar);
+  lv_obj_set_size(btn_ref, 70, 28);
+  lv_obj_align(btn_ref, LV_ALIGN_TOP_RIGHT, -8, 6);
+  lv_obj_set_style_bg_color(btn_ref, LV_COLOR_PRIMARY, 0);
+  lv_obj_add_event_cb(btn_ref, [](lv_event_t* e){ ClassPetUI::getInstance().markFeatureSync(1); }, LV_EVENT_CLICKED, NULL);
+  lv_obj_t* lbl_r = lv_label_create(btn_ref); lv_label_set_text(lbl_r, "刷新"); setCjkFont(lbl_r, cjkFont(), 0); lv_obj_center(lbl_r);
+}
+
+void ClassPetUI::showCalendar() {
+  loadScreen(_scr_calendar);
+  markFeatureSync(1);
+}
+
+// ==========================================
+// 清单屏
+// ==========================================
+void ClassPetUI::initListScreen() {
+  lv_obj_t* title = lv_label_create(_scr_list);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 6);
+  lv_obj_set_style_text_color(title, LV_COLOR_TEXT, 0);
+  setCjkFont(title, cjkFont(), 0);
+  lv_label_set_text(title, "我的清单");
+
+  _list_checklist = lv_obj_create(_scr_list);
+  lv_obj_set_size(_list_checklist, 300, 200);
+  lv_obj_align(_list_checklist, LV_ALIGN_TOP_MID, 0, 34);
+  lv_obj_set_style_bg_opa(_list_checklist, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(_list_checklist, 0, 0);
+  lv_obj_set_style_pad_all(_list_checklist, 4, 0);
+  lv_obj_set_style_pad_row(_list_checklist, 6, 0);
+  lv_obj_set_flex_flow(_list_checklist, LV_FLEX_FLOW_COLUMN);
+  lv_obj_add_flag(_list_checklist, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t* hint = lv_label_create(_scr_list);
+  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -4);
+  lv_obj_set_style_text_color(hint, LV_COLOR_TEXT_MUTED, 0);
+  setCjkFont(hint, cjkFont(), 0);
+  lv_label_set_text(hint, "点击项目可切换完成 · 语音可添加");
+
+  lv_obj_t* btn_back = lv_button_create(_scr_list);
+  lv_obj_set_size(btn_back, 70, 28);
+  lv_obj_align(btn_back, LV_ALIGN_TOP_LEFT, 8, 6);
+  lv_obj_set_style_bg_color(btn_back, lv_color_hex(0x475569), 0);
+  lv_obj_add_event_cb(btn_back, [](lv_event_t* e){ ClassPetUI::getInstance().loadScreen(ClassPetUI::getInstance()._scr_menu); }, LV_EVENT_CLICKED, NULL);
+  lv_obj_t* lbl_b = lv_label_create(btn_back); lv_label_set_text(lbl_b, "返回"); setCjkFont(lbl_b, cjkFont(), 0); lv_obj_center(lbl_b);
+
+  lv_obj_t* btn_ref = lv_button_create(_scr_list);
+  lv_obj_set_size(btn_ref, 70, 28);
+  lv_obj_align(btn_ref, LV_ALIGN_TOP_RIGHT, -8, 6);
+  lv_obj_set_style_bg_color(btn_ref, LV_COLOR_PRIMARY, 0);
+  lv_obj_add_event_cb(btn_ref, [](lv_event_t* e){ ClassPetUI::getInstance().markFeatureSync(2); }, LV_EVENT_CLICKED, NULL);
+  lv_obj_t* lbl_r = lv_label_create(btn_ref); lv_label_set_text(lbl_r, "刷新"); setCjkFont(lbl_r, cjkFont(), 0); lv_obj_center(lbl_r);
+}
+
+void ClassPetUI::showList() {
+  loadScreen(_scr_list);
+  markFeatureSync(2);
+}
+
+void ClassPetUI::checklistRowCb(lv_event_t* e) {
+  char* idc = (char*)lv_event_get_user_data(e);
+  if (!idc) return;
+  ClassPetUI& ui = ClassPetUI::getInstance();
+  int idx = -1;
+  for (size_t i = 0; i < ui._check_ids.size(); i++) {
+    if (ui._check_ids[i] == String(idc)) { idx = (int)i; break; }
+  }
+  if (idx < 0) return;
+  bool nd = !ui._check_done[idx];
+  ui._check_done[idx] = nd;
+  ApiClient::putChecklistItem(String(idc), nd);
+  ui.markFeatureSync(2);
+}
+
+// ==========================================
+// 闹铃屏
+// ==========================================
+void ClassPetUI::initAlarmScreen() {
+  lv_obj_t* title = lv_label_create(_scr_alarm);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 6);
+  lv_obj_set_style_text_color(title, LV_COLOR_TEXT, 0);
+  setCjkFont(title, cjkFont(), 0);
+  lv_label_set_text(title, "我的闹铃");
+
+  _list_alarm = lv_obj_create(_scr_alarm);
+  lv_obj_set_size(_list_alarm, 300, 200);
+  lv_obj_align(_list_alarm, LV_ALIGN_TOP_MID, 0, 34);
+  lv_obj_set_style_bg_opa(_list_alarm, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(_list_alarm, 0, 0);
+  lv_obj_set_style_pad_all(_list_alarm, 4, 0);
+  lv_obj_set_style_pad_row(_list_alarm, 6, 0);
+  lv_obj_set_flex_flow(_list_alarm, LV_FLEX_FLOW_COLUMN);
+  lv_obj_add_flag(_list_alarm, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t* hint = lv_label_create(_scr_alarm);
+  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -4);
+  lv_obj_set_style_text_color(hint, LV_COLOR_TEXT_MUTED, 0);
+  setCjkFont(hint, cjkFont(), 0);
+  lv_label_set_text(hint, "可语音说：明天七点叫我起床");
+
+  lv_obj_t* btn_back = lv_button_create(_scr_alarm);
+  lv_obj_set_size(btn_back, 70, 28);
+  lv_obj_align(btn_back, LV_ALIGN_TOP_LEFT, 8, 6);
+  lv_obj_set_style_bg_color(btn_back, lv_color_hex(0x475569), 0);
+  lv_obj_add_event_cb(btn_back, [](lv_event_t* e){ ClassPetUI::getInstance().loadScreen(ClassPetUI::getInstance()._scr_menu); }, LV_EVENT_CLICKED, NULL);
+  lv_obj_t* lbl_b = lv_label_create(btn_back); lv_label_set_text(lbl_b, "返回"); setCjkFont(lbl_b, cjkFont(), 0); lv_obj_center(lbl_b);
+
+  lv_obj_t* btn_ref = lv_button_create(_scr_alarm);
+  lv_obj_set_size(btn_ref, 70, 28);
+  lv_obj_align(btn_ref, LV_ALIGN_TOP_RIGHT, -8, 6);
+  lv_obj_set_style_bg_color(btn_ref, LV_COLOR_PRIMARY, 0);
+  lv_obj_add_event_cb(btn_ref, [](lv_event_t* e){ ClassPetUI::getInstance().markFeatureSync(3); }, LV_EVENT_CLICKED, NULL);
+  lv_obj_t* lbl_r = lv_label_create(btn_ref); lv_label_set_text(lbl_r, "刷新"); setCjkFont(lbl_r, cjkFont(), 0); lv_obj_center(lbl_r);
+}
+
+void ClassPetUI::showAlarm() {
+  loadScreen(_scr_alarm);
+  markFeatureSync(3);
+}
+
+// ==========================================
+// 宠物主人记忆屏
+// ==========================================
+void ClassPetUI::initOwnerScreen() {
+  lv_obj_t* title = lv_label_create(_scr_owner);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 6);
+  lv_obj_set_style_text_color(title, LV_COLOR_TEXT, 0);
+  setCjkFont(title, cjkFont(), 0);
+  lv_label_set_text(title, "宠物记忆");
+
+  _list_owner = lv_obj_create(_scr_owner);
+  lv_obj_set_size(_list_owner, 300, 200);
+  lv_obj_align(_list_owner, LV_ALIGN_TOP_MID, 0, 34);
+  lv_obj_set_style_bg_opa(_list_owner, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(_list_owner, 0, 0);
+  lv_obj_set_style_pad_all(_list_owner, 4, 0);
+  lv_obj_set_style_pad_row(_list_owner, 6, 0);
+  lv_obj_set_flex_flow(_list_owner, LV_FLEX_FLOW_COLUMN);
+  lv_obj_add_flag(_list_owner, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t* hint = lv_label_create(_scr_owner);
+  lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -4);
+  lv_obj_set_style_text_color(hint, LV_COLOR_TEXT_MUTED, 0);
+  setCjkFont(hint, cjkFont(), 0);
+  lv_label_set_text(hint, "宠物会记住你 · 老师可在后台维护");
+
+  lv_obj_t* btn_back = lv_button_create(_scr_owner);
+  lv_obj_set_size(btn_back, 70, 28);
+  lv_obj_align(btn_back, LV_ALIGN_TOP_LEFT, 8, 6);
+  lv_obj_set_style_bg_color(btn_back, lv_color_hex(0x475569), 0);
+  lv_obj_add_event_cb(btn_back, [](lv_event_t* e){ ClassPetUI::getInstance().loadScreen(ClassPetUI::getInstance()._scr_menu); }, LV_EVENT_CLICKED, NULL);
+  lv_obj_t* lbl_b = lv_label_create(btn_back); lv_label_set_text(lbl_b, "返回"); setCjkFont(lbl_b, cjkFont(), 0); lv_obj_center(lbl_b);
+
+  lv_obj_t* btn_ref = lv_button_create(_scr_owner);
+  lv_obj_set_size(btn_ref, 70, 28);
+  lv_obj_align(btn_ref, LV_ALIGN_TOP_RIGHT, -8, 6);
+  lv_obj_set_style_bg_color(btn_ref, LV_COLOR_PRIMARY, 0);
+  lv_obj_add_event_cb(btn_ref, [](lv_event_t* e){ ClassPetUI::getInstance().markFeatureSync(4); }, LV_EVENT_CLICKED, NULL);
+  lv_obj_t* lbl_r = lv_label_create(btn_ref); lv_label_set_text(lbl_r, "刷新"); setCjkFont(lbl_r, cjkFont(), 0); lv_obj_center(lbl_r);
+}
+
+void ClassPetUI::showOwnerMemory() {
+  loadScreen(_scr_owner);
+  markFeatureSync(4);
+}
+
+void ClassPetUI::showStandbyClock() {
+  loadScreen(_scr_standby);
+}
+
+void ClassPetUI::markFeatureSync(uint8_t type) {
+  g_featureReq = type;
+}
+
+// ==========================================
+// 后台取回数据后渲染对应列表
+// ==========================================
+void ClassPetUI::renderFeatureData(uint8_t type, const String& json) {
+  DynamicJsonDocument doc(4096);
+  DeserializationError err = deserializeJson(doc, json);
+  if (err) {
+    DEBUG_PRINTF("⚠️ [UI] 功能数据 JSON 解析失败: %s\n", err.c_str());
+    return;
+  }
+
+  if (type == 1 && _list_calendar) {
+    clearList(_list_calendar);
+    JsonArray events = doc["events"].as<JsonArray>();
+    if (!events || events.size() == 0) {
+      addListRow(_list_calendar, "(暂无日程)", "在网页后台或语音添加", true);
+    } else {
+      for (JsonObject e : events) {
+        String date = e["event_date"].as<String>();
+        String time = e["time_str"].as<String>();
+        String title = e["title"].as<String>();
+        String desc = e["description"].as<String>();
+        String head = date + (time.length() ? (" " + time) : "");
+        addListRow(_list_calendar, head, title + (desc.length() ? ("\n" + desc) : ""));
+      }
+    }
+  } else if (type == 2 && _list_checklist) {
+    clearList(_list_checklist);
+    _check_ids.clear();
+    _check_done.clear();
+    JsonArray items = doc["items"].as<JsonArray>();
+    if (!items || items.size() == 0) {
+      addListRow(_list_checklist, "(暂无清单)", "在网页后台添加", true);
+    } else {
+      for (JsonObject it : items) {
+        String id = it["id"].as<String>();
+        String content = it["content"].as<String>();
+        bool done = it["is_done"].as<int>() ? true : false;
+        _check_ids.push_back(id);
+        _check_done.push_back(done);
+        String prefix = done ? "[✓] " : "[ ] ";
+        lv_obj_t* row = addListRow(_list_checklist, prefix + content, "", done);
+        if (row) {
+          char* idc = strdup(id.c_str());
+          lv_obj_set_user_data(row, idc);
+          lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+          lv_obj_add_event_cb(row, checklistRowCb, LV_EVENT_CLICKED, NULL);
+        }
+      }
+    }
+  } else if (type == 3 && _list_alarm) {
+    clearList(_list_alarm);
+    JsonArray scheds = doc["schedules"].as<JsonArray>();
+    if (!scheds || scheds.size() == 0) {
+      addListRow(_list_alarm, "(暂无闹铃)", "在网页后台或语音添加", true);
+    } else {
+      const char* wday[] = {"日","一","二","三","四","五","六"};
+      for (JsonObject s : scheds) {
+        int d = s["day_of_week"].as<int>();
+        String t = s["time_str"].as<String>();
+        String desc = s["task_desc"].as<String>();
+        String head = "周" + String(wday[(d>=0&&d<=6)?d:0]) + " " + t;
+        addListRow(_list_alarm, head, desc);
+      }
+    }
+  } else if (type == 4 && _list_owner) {
+    clearList(_list_owner);
+    JsonObject profile = doc["profile"].as<JsonObject>();
+    if (profile) {
+      if (profile["grade"].as<String>().length())
+        addListRow(_list_owner, "年级: " + profile["grade"].as<String>(), "");
+      JsonArray subs = profile["subjects"].as<JsonArray>();
+      if (subs && subs.size()) {
+        String s;
+        for (JsonVariant v : subs) { s += (s.length()?", ":"") + v.as<String>(); }
+        addListRow(_list_owner, "科目: " + s, "");
+      }
+      if (profile["goals"].as<String>().length())
+        addListRow(_list_owner, "目标: " + profile["goals"].as<String>(), "");
+      if (profile["notes"].as<String>().length())
+        addListRow(_list_owner, "备注: " + profile["notes"].as<String>(), "");
+    } else {
+      addListRow(_list_owner, "(暂无画像)", "老师可在后台完善学生画像", true);
+    }
+    JsonArray emo = doc["emotion_recent"].as<JsonArray>();
+    if (emo && emo.size()) {
+      for (JsonObject o : emo) {
+        String txt = "情绪: " + o["emotion"].as<String>();
+        if (o["note"].as<String>().length()) txt += " (" + o["note"].as<String>() + ")";
+        addListRow(_list_owner, txt, "", true);
+      }
+    }
+    JsonArray learn = doc["learning_recent"].as<JsonArray>();
+    if (learn && learn.size()) {
+      for (JsonObject o : learn) {
+        String txt = "学习: " + o["subject"].as<String>() + " " + o["mastery"].as<String>();
+        if (o["note"].as<String>().length()) txt += " (" + o["note"].as<String>() + ")";
+        addListRow(_list_owner, txt, "", true);
       }
     }
   }

@@ -8,6 +8,7 @@
 
 #include <lvgl.h>
 #include <Arduino.h>
+#include <vector>
 
 class ClassPetUI {
 public:
@@ -29,6 +30,20 @@ public:
   void showRecordingScreen(int volumeDb);
   void showTomatoSettings();
   uint32_t getSelectedTomatoTime();
+
+  // 新增功能屏
+  void showSettings();
+  void showCalendar();
+  void showList();
+  void showAlarm();
+  void showOwnerMemory();
+  void showStandbyClock();
+  // 请求后台同步某功能数据 (type: 1=日历 2=清单 3=闹铃 4=主人记忆)
+  void markFeatureSync(uint8_t type);
+  // 后台(主循环)取回数据后调用，刷新对应列表
+  void renderFeatureData(uint8_t type, const String& json);
+  // 刷新设置页的只读信息 (机器码/状态/固件/系统)
+  void refreshSettingsInfo();
   
   void showToast(const String& message, int duration_ms = 3000);
   void forceSwitchToNormal();
@@ -38,6 +53,8 @@ public:
   void setVoiceOverlayTitle(const String& title);
   void setVoiceOverlayLevel(int db);
   void setVoiceOverlayCaption(bool isUser, const String& text);
+  void setVoiceOverlayCountdown(int seconds);      // 更新录音倒计时
+  void setVoiceOverlayProcessing(bool processing); // 切换到"识别中" spinner
   void exitVoiceOverlay();
 
   // 设置并在主页播放宠物动图
@@ -47,6 +64,7 @@ public:
   ClassPetUI() : 
     _scr_normal(nullptr), _scr_diag(nullptr), _scr_tomato(nullptr), _scr_processing(nullptr),
     _scr_menu(nullptr), _scr_standby(nullptr),
+    _scr_settings(nullptr), _scr_calendar(nullptr), _scr_list(nullptr), _scr_alarm(nullptr), _scr_owner(nullptr),
     _card_normal(nullptr),
     _lbl_normal_wifi(nullptr), _lbl_normal_battery(nullptr), _bar_battery(nullptr), _lbl_normal_name(nullptr), _lbl_normal_lv(nullptr), 
     _bar_normal_exp(nullptr), _lbl_normal_exp(nullptr),
@@ -55,7 +73,11 @@ public:
     _lbl_diag_http(nullptr), _lbl_diag_tls(nullptr), _lbl_diag_sugg(nullptr), _lbl_diag_mac(nullptr),
     _lbl_tomato_time(nullptr), _arc_tomato_progress(nullptr), _lbl_tomato_status(nullptr),
     _lbl_proc_text(nullptr), _bar_rec_vol(nullptr), _toast_label(nullptr), _toast_container(nullptr),
-    _gif_pet(nullptr) {}
+    _gif_pet(nullptr),
+    _slider_volume(nullptr), _slider_brightness(nullptr), _slider_standby(nullptr), _slider_screenoff(nullptr),
+    _lbl_volume_val(nullptr), _lbl_brightness_val(nullptr), _lbl_standby_val(nullptr), _lbl_screenoff_val(nullptr),
+    _lbl_machine_code(nullptr), _lbl_dev_status(nullptr), _lbl_fw_info(nullptr), _lbl_sys_info(nullptr),
+    _list_calendar(nullptr), _list_checklist(nullptr), _list_alarm(nullptr), _list_owner(nullptr) {}
   
   // 屏幕对象
   lv_obj_t* _scr_normal;
@@ -64,6 +86,11 @@ public:
   lv_obj_t* _scr_processing;
   lv_obj_t* _scr_menu;
   lv_obj_t* _scr_standby;
+  lv_obj_t* _scr_settings;
+  lv_obj_t* _scr_calendar;
+  lv_obj_t* _scr_list;
+  lv_obj_t* _scr_alarm;
+  lv_obj_t* _scr_owner;
   
   // 主界面控件
   lv_obj_t* _card_normal;
@@ -102,6 +129,29 @@ public:
 
   lv_image_dsc_t _gif_tomato_dsc;
 
+  // 设置屏控件
+  lv_obj_t* _slider_volume;
+  lv_obj_t* _slider_brightness;
+  lv_obj_t* _slider_standby;
+  lv_obj_t* _slider_screenoff;
+  lv_obj_t* _lbl_volume_val;
+  lv_obj_t* _lbl_brightness_val;
+  lv_obj_t* _lbl_standby_val;
+  lv_obj_t* _lbl_screenoff_val;
+  lv_obj_t* _lbl_machine_code;
+  lv_obj_t* _lbl_dev_status;
+  lv_obj_t* _lbl_fw_info;
+  lv_obj_t* _lbl_sys_info;
+
+  // 功能列表容器
+  lv_obj_t* _list_calendar;
+  lv_obj_t* _list_checklist;
+  lv_obj_t* _list_alarm;
+  lv_obj_t* _list_owner;
+  // 清单项 id / 完成态缓存(供点击切换)
+  std::vector<String> _check_ids;
+  std::vector<bool> _check_done;
+
   
   // 进度/录音界面控件
   lv_obj_t* _lbl_proc_text;
@@ -115,7 +165,10 @@ public:
   // P0: 语音覆盖层控件 (child of 当前屏, 透明背景, 宠物在底层保持可见)
   lv_obj_t* _voice_overlay = nullptr;
   lv_obj_t* _voice_title = nullptr;
+  lv_obj_t* _voice_countdown = nullptr;
   lv_obj_t* _voice_level = nullptr;
+  lv_obj_t* _voice_stop_btn = nullptr;
+  lv_obj_t* _voice_processing_spinner = nullptr;
   lv_obj_t* _voice_you = nullptr;
   lv_obj_t* _voice_pet = nullptr;
   
@@ -125,10 +178,20 @@ public:
   void initProcessingScreen();
   void initMenuScreen();
   void initStandbyScreen();
+  void initSettingsScreen();
+  void initCalendarScreen();
+  void initListScreen();
+  void initAlarmScreen();
+  void initOwnerScreen();
+
+  // 通用列表行构造: 在 scroll 容器内添加一行(标题+副标题), 返回该行对象
+  lv_obj_t* addListRow(lv_obj_t* scroll, const String& title, const String& sub, bool dim = false);
+  void clearList(lv_obj_t* scroll);
   
   // 内部辅助
   static void toastTimerCb(lv_timer_t* timer);
   static void gesture_event_cb(lv_event_t* e);
+  static void checklistRowCb(lv_event_t* e);
   
   // 统一界面跳转
   void loadScreen(lv_obj_t* scr);

@@ -258,6 +258,10 @@ int ApiClient::sendRequest(const String& method, const String& path, const Strin
     httpCode = httpClient.GET();
   } else if (method == "POST") {
     httpCode = httpClient.POST(body);
+  } else if (method == "PUT") {
+    httpCode = httpClient.PUT(body);
+  } else if (method == "DELETE") {
+    httpCode = httpClient.sendRequest("DELETE", String(""));
   }
 
   lastDiagnostic.http_code = httpCode;
@@ -418,6 +422,44 @@ bool ApiClient::sendHeartbeat(int batteryLevel, bool isCharging) {
   serializeJson(reqDoc, reqBody);
   
   int code = sendRequest("POST", "/api/device/heartbeat", reqBody, responseStr);
+  return (code == 200);
+}
+
+bool ApiClient::getCalendarEvents(String& outJson) {
+  outJson = "";
+  String path = "/api/device/calendar?device_id=" + Network::getMacAddress();
+  int code = sendRequest("GET", path, "", outJson);
+  return (code == 200);
+}
+
+bool ApiClient::getChecklist(String& outJson) {
+  outJson = "";
+  String path = "/api/device/checklist?device_id=" + Network::getMacAddress();
+  int code = sendRequest("GET", path, "", outJson);
+  return (code == 200);
+}
+
+bool ApiClient::getOwnerProfile(String& outJson) {
+  outJson = "";
+  String path = "/api/device/owner-profile?device_id=" + Network::getMacAddress();
+  int code = sendRequest("GET", path, "", outJson);
+  return (code == 200);
+}
+
+bool ApiClient::getSchedules(String& outJson) {
+  outJson = "";
+  String path = "/api/device/schedules?device_id=" + Network::getMacAddress();
+  int code = sendRequest("GET", path, "", outJson);
+  return (code == 200);
+}
+
+bool ApiClient::putChecklistItem(const String& id, bool done) {
+  String responseStr;
+  StaticJsonDocument<64> reqDoc;
+  reqDoc["is_done"] = done ? 1 : 0;
+  String reqBody;
+  serializeJson(reqDoc, reqBody);
+  int code = sendRequest("PUT", "/api/device/checklist/" + id, reqBody, responseStr);
   return (code == 200);
 }
 

@@ -83,6 +83,7 @@ private:
   uint32_t _voiceDoneTime = 0;     // 最近一次语音流程结束的时间戳 (用于冷却去抖)
   String _sttText;                 // ASR 识别文本
   String _lastReplyText;           // 最近一次 LLM 回复 (用于播放结束后吐司)
+  int _voiceTomatoMinutes = 0;     // 语音“开始番茄钟”指定的时长(分钟), 0=用 UI 默认
   String _ttsFallbackUrl;          // 服务端 PCM 解码失败时的降级 MP3 地址
 
   void parseServerUrl(const String& url, String& host, uint16_t& port, bool& useTls);

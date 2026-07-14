@@ -31,6 +31,11 @@ void Network::init() {
   DEBUG_PRINTF("🌐 设备唯一硬件 MAC 识别码: %s\n", cached_mac.c_str());
 }
 
+String Network::getLocalIP() {
+  if (!isConnected()) return String("");
+  return WiFi.localIP().toString();
+}
+
 bool Network::connectWiFi(const char* ssid, const char* password) {
   if (!ssid || strlen(ssid) == 0) {
     DEBUG_PRINTLN("❌ 错误: WiFi SSID 为空！");

@@ -29,6 +29,9 @@ public:
   void resetActivityTime();
   unsigned long getLastActivityTime() const { return _last_activity_time; }
 
+  // 设置屏幕背光亮度 (0-100)，0=关闭
+  void setBrightness(int pct);
+
   // LVGL 互斥锁：多核访问保护
   void lock()   { if (_lvgl_mutex) xSemaphoreTake(_lvgl_mutex, portMAX_DELAY); }
   void unlock() { if (_lvgl_mutex) xSemaphoreGive(_lvgl_mutex); }
@@ -49,6 +52,7 @@ private:
 
   unsigned long _last_activity_time;
   bool _is_screen_on;
+  int _ledc_channel = -1;
   
   
   // LVGL 回调

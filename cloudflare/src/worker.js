@@ -2,10 +2,11 @@
 // 承担: REST API + /ws/voice(转交 Durable Object) + SSE 实时事件 + /device/* 设备端点
 // 数据库: D1 (SQLite 兼容) · AI: Workers AI (keyless) · 资产: R2(可选)
 
-import { bindDb, q, getAsync, allAsync, runAsync, getSetting, setSetting } from './db.js'
+import { bindDb, q, getAsync, allAsync, runAsync, getSetting, setSetting, getOwnerProfile, ownerProfileToContext } from './db.js'
 import { setSecrets, hashPassword, verifyPassword, generateToken, verifyToken, getUserIdFromAuth } from './auth.js'
 import { fetchTtsMp3, petChat } from './ai.js'
-import { VoiceDO } from './voice-do.js'
+import { VoiceDO, applyIntent } from './voice-do.js'
+import { matchCorpus } from './intents.js'
 
 export { VoiceDO }
 
@@ -141,29 +142,32 @@ async function runVoicePipeline(env, deviceId, pcmChunks, pcmBytes, prefext) {
     try {
       text = await transcribe(env, pcmChunks, pcmBytes)
     } catch (e) {
+      console.error('❌ [ASR] transcribe 失败:', e && (e.stack || e.message) || e)
       return { action: 'none', text: '听不清楚', reply_text: '抱歉，刚才没听清，请再说一遍。' }
     }
   }
   if (!text) return { action: 'none', reply_text: '未提供音频或文本。' }
+  // 本地语料优先: 命中即执行动作(快 + 省 token), 否则走大模型闲聊
+  const corpus = matchCorpus(text)
   let nlp
-  try {
-    nlp = await classifyIntent(env, text, '')
-  } catch {
-    nlp = regexClassifyIntent(text)
+  if (corpus && corpus.action !== 'chat') {
+    nlp = { action: corpus.action, ...corpus.params, reply_text: corpus.reply || '' }
+    console.log('🧠 [API] 语料命中:', corpus.action, JSON.stringify(corpus.params || {}))
+  } else {
+    try {
+      let ownerCtx = ''
+      try {
+        const profile = await getOwnerProfile(db, student.id)
+        ownerCtx = ownerProfileToContext(profile)
+      } catch {}
+      nlp = await classifyIntent(env, text, '', ownerCtx)
+    } catch {
+      nlp = regexClassifyIntent(text)
+    }
   }
-  // 复用 DO 的 applyIntent 逻辑(复制一份以保持独立)
-  const responseData = { action: nlp.action, text, reply_text: nlp.reply_text }
-  if (nlp.action === 'apply_task') {
-    const taskName = nlp.task_name || '日常表现优秀'
-    const rule = await q.get(db, 'SELECT points FROM evaluation_rules WHERE name LIKE ? LIMIT 1', `%${taskName}%`)
-    const points = rule ? rule.points : 1
-    await q.run(
-      db,
-      'INSERT INTO student_task_applications (id, student_id, task_name, points, status, auto_confirm_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      uuid(), student.id, taskName, points, 'pending', now + 30 * 60 * 1000, now
-    )
-    responseData.reply_text = nlp.reply_text || `已为您申报了"${taskName}"，价值${points}分。`
-  }
+  if (nlp.reply_text) nlp.reply_text = nlp.reply_text.slice(0, 200) // 防超长 TTS 链接
+  const responseData = await applyIntent(env, student, nlp, now, text)
+  responseData.text = text
   await q.run(db, 'INSERT INTO chat_logs (id, student_id, user_message, ai_response, timestamp) VALUES (?, ?, ?, ?, ?)', uuid(), student.id, text, responseData.reply_text, now)
   const { fetchTtsMp3 } = await import('./ai.js')
   const tts = await fetchTtsMp3(responseData.reply_text)
@@ -601,6 +605,226 @@ async function handleApi(request, env, ctx) {
       if (!b || !b.classes) return json({ error: '无效备份' }, 400)
       for (const c of b.classes) await runAsync('INSERT OR REPLACE INTO classes (id, user_id, name, created_at, updated_at) VALUES (?,?,?,?,?)', c.id, c.user_id, c.name, c.created_at, c.updated_at)
       for (const s of b.students) await runAsync('INSERT OR REPLACE INTO students (id, class_id, name, student_no, total_points, pet_type, pet_level, pet_exp, device_id, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)', s.id, s.class_id, s.name, s.student_no, s.total_points, s.pet_type, s.pet_level, s.pet_exp, s.device_id, s.created_at)
+      return json({ success: true })
+    }
+
+    // ===== 宠物主人记忆(设备 + 网页通用) =====
+    // 通过 device_id 解析 student_id 的辅助
+    async function studentIdByDevice(deviceId) {
+      const stu = await getAsync('SELECT id FROM students WHERE UPPER(device_id)=UPPER(?)', deviceId)
+      return stu ? stu.id : null
+    }
+
+    // ---- 设备端: 日历 ----
+    if (path === '/device/calendar' && method === 'GET') {
+      const deviceId = getDeviceId(request)
+      const sid = await studentIdByDevice(deviceId)
+      if (!sid) return json({ status: 'unbound', events: [] })
+      await runAsync('UPDATE students SET last_seen=? WHERE id=?', Date.now(), sid)
+      const events = await allAsync('SELECT id, title, event_date, time_str, description, created_at FROM calendar_events WHERE student_id=? ORDER BY event_date ASC, time_str ASC', sid)
+      return json({ status: 'ok', events })
+    }
+    if (path === '/device/calendar' && method === 'POST') {
+      const deviceId = getDeviceId(request)
+      const sid = await studentIdByDevice(deviceId)
+      if (!sid) return json({ status: 'unbound', error: '未绑定' }, 400)
+      const b = await readBody(request)
+      if (!b.title || !b.event_date) return json({ error: '缺少 title 或 event_date' }, 400)
+      const id = uuid()
+      await runAsync('INSERT INTO calendar_events (id, student_id, title, event_date, time_str, description, created_at) VALUES (?,?,?,?,?,?,?)', id, sid, String(b.title).slice(0,80), String(b.event_date).slice(0,10), b.time_str ? String(b.time_str).slice(0,5) : null, b.description ? String(b.description).slice(0,200) : '', Date.now())
+      return json({ success: true, id })
+    }
+    if ((m = path.match(/^\/device\/calendar\/([^/]+)$/)) && method === 'DELETE') {
+      const deviceId = getDeviceId(request)
+      const sid = await studentIdByDevice(deviceId)
+      if (!sid) return json({ status: 'unbound', error: '未绑定' }, 400)
+      await runAsync('DELETE FROM calendar_events WHERE id=? AND student_id=?', m[1], sid)
+      return json({ success: true })
+    }
+
+    // ---- 设备端: 清单 ----
+    if (path === '/device/checklist' && method === 'GET') {
+      const deviceId = getDeviceId(request)
+      const sid = await studentIdByDevice(deviceId)
+      if (!sid) return json({ status: 'unbound', items: [] })
+      await runAsync('UPDATE students SET last_seen=? WHERE id=?', Date.now(), sid)
+      const items = await allAsync('SELECT id, content, is_done, created_at FROM checklist_items WHERE student_id=? ORDER BY is_done ASC, created_at ASC', sid)
+      return json({ status: 'ok', items })
+    }
+    if (path === '/device/checklist' && method === 'POST') {
+      const deviceId = getDeviceId(request)
+      const sid = await studentIdByDevice(deviceId)
+      if (!sid) return json({ status: 'unbound', error: '未绑定' }, 400)
+      const b = await readBody(request)
+      if (!b.content) return json({ error: '缺少 content' }, 400)
+      const id = uuid()
+      await runAsync('INSERT INTO checklist_items (id, student_id, content, is_done, created_at) VALUES (?,?,?,0,?)', id, sid, String(b.content).slice(0,120), Date.now())
+      return json({ success: true, id })
+    }
+    if ((m = path.match(/^\/device\/checklist\/([^/]+)$/)) && method === 'PUT') {
+      const deviceId = getDeviceId(request)
+      const sid = await studentIdByDevice(deviceId)
+      if (!sid) return json({ status: 'unbound', error: '未绑定' }, 400)
+      const b = await readBody(request)
+      const done = b.is_done ? 1 : 0
+      await runAsync('UPDATE checklist_items SET is_done=? WHERE id=? AND student_id=?', done, m[1], sid)
+      return json({ success: true })
+    }
+    if ((m = path.match(/^\/device\/checklist\/([^/]+)$/)) && method === 'DELETE') {
+      const deviceId = getDeviceId(request)
+      const sid = await studentIdByDevice(deviceId)
+      if (!sid) return json({ status: 'unbound', error: '未绑定' }, 400)
+      await runAsync('DELETE FROM checklist_items WHERE id=? AND student_id=?', m[1], sid)
+      return json({ success: true })
+    }
+
+    // ---- 设备端: 宠物主人记忆 ----
+    if (path === '/device/owner-profile' && method === 'GET') {
+      const deviceId = getDeviceId(request)
+      const sid = await studentIdByDevice(deviceId)
+      if (!sid) return json({ status: 'unbound', profile: null })
+      await runAsync('UPDATE students SET last_seen=? WHERE id=?', Date.now(), sid)
+      const p = await getOwnerProfile(env.DB, sid)
+      if (!p) return json({ status: 'ok', profile: null, emotion_recent: [], learning_recent: [] })
+      let profile = null, emotion_recent = [], learning_recent = []
+      try { profile = p.profile_json ? JSON.parse(p.profile_json) : null } catch {}
+      try { emotion_recent = p.emotion_log ? JSON.parse(p.emotion_log).slice(-8) : [] } catch {}
+      try { learning_recent = p.learning_log ? JSON.parse(p.learning_log).slice(-8) : [] } catch {}
+      return json({ status: 'ok', profile, emotion_recent, learning_recent })
+    }
+    if (path === '/device/owner-profile' && method === 'POST') {
+      const deviceId = getDeviceId(request)
+      const sid = await studentIdByDevice(deviceId)
+      if (!sid) return json({ status: 'unbound', error: '未绑定' }, 400)
+      const b = await readBody(request)
+      const now = Date.now()
+      let p = await getOwnerProfile(db, sid)
+      if (!p) {
+        p = { profile_json: null, emotion_log: '[]', learning_log: '[]' }
+        await runAsync('INSERT INTO owner_profiles (student_id, profile_json, emotion_log, learning_log, updated_at) VALUES (?,?,?,?,?)', sid, null, '[]', '[]', now)
+      }
+      if (b.type === 'profile' && b.data) {
+        await runAsync('UPDATE owner_profiles SET profile_json=?, updated_at=? WHERE student_id=?', JSON.stringify(b.data).slice(0,2000), now, sid)
+      } else if (b.type === 'emotion' && b.data) {
+        let arr = []
+        try { arr = p.emotion_log ? JSON.parse(p.emotion_log) : [] } catch {}
+        arr.push({ ts: now, ...b.data })
+        if (arr.length > 100) arr = arr.slice(-100)
+        await runAsync('UPDATE owner_profiles SET emotion_log=?, updated_at=? WHERE student_id=?', JSON.stringify(arr), now, sid)
+      } else if (b.type === 'learning' && b.data) {
+        let arr = []
+        try { arr = p.learning_log ? JSON.parse(p.learning_log) : [] } catch {}
+        arr.push({ ts: now, ...b.data })
+        if (arr.length > 100) arr = arr.slice(-100)
+        await runAsync('UPDATE owner_profiles SET learning_log=?, updated_at=? WHERE student_id=?', JSON.stringify(arr), now, sid)
+      } else {
+        return json({ error: '未知 type' }, 400)
+      }
+      return json({ success: true })
+    }
+
+    // ---- 网页端(老师后台): 日历 ----
+    if ((m = path.match(/^\/students\/([^/]+)\/calendar$/)) && method === 'GET') {
+      const uid = await requireUser(request, env)
+      const stu = await getAsync('SELECT s.id FROM students s JOIN classes c ON s.class_id=c.id WHERE s.id=? AND c.user_id=?', m[1], uid)
+      if (!stu) return json({ error: '无权限' }, 403)
+      const events = await allAsync('SELECT * FROM calendar_events WHERE student_id=? ORDER BY event_date ASC, time_str ASC', m[1])
+      return json({ success: true, events })
+    }
+    if ((m = path.match(/^\/students\/([^/]+)\/calendar$/)) && method === 'POST') {
+      const uid = await requireUser(request, env)
+      const stu = await getAsync('SELECT s.id FROM students s JOIN classes c ON s.class_id=c.id WHERE s.id=? AND c.user_id=?', m[1], uid)
+      if (!stu) return json({ error: '无权限' }, 403)
+      const b = await readBody(request)
+      if (!b.title || !b.event_date) return json({ error: '缺少 title 或 event_date' }, 400)
+      const id = uuid()
+      await runAsync('INSERT INTO calendar_events (id, student_id, title, event_date, time_str, description, created_at) VALUES (?,?,?,?,?,?,?)', id, m[1], String(b.title).slice(0,80), String(b.event_date).slice(0,10), b.time_str ? String(b.time_str).slice(0,5) : null, b.description ? String(b.description).slice(0,200) : '', Date.now())
+      return json({ success: true, id })
+    }
+    if ((m = path.match(/^\/students\/([^/]+)\/calendar\/([^/]+)$/)) && method === 'DELETE') {
+      const uid = await requireUser(request, env)
+      const stu = await getAsync('SELECT s.id FROM students s JOIN classes c ON s.class_id=c.id WHERE s.id=? AND c.user_id=?', m[1], uid)
+      if (!stu) return json({ error: '无权限' }, 403)
+      await runAsync('DELETE FROM calendar_events WHERE id=? AND student_id=?', m[2], m[1])
+      return json({ success: true })
+    }
+
+    // ---- 网页端(老师后台): 清单 ----
+    if ((m = path.match(/^\/students\/([^/]+)\/checklist$/)) && method === 'GET') {
+      const uid = await requireUser(request, env)
+      const stu = await getAsync('SELECT s.id FROM students s JOIN classes c ON s.class_id=c.id WHERE s.id=? AND c.user_id=?', m[1], uid)
+      if (!stu) return json({ error: '无权限' }, 403)
+      const items = await allAsync('SELECT * FROM checklist_items WHERE student_id=? ORDER BY is_done ASC, created_at ASC', m[1])
+      return json({ success: true, items })
+    }
+    if ((m = path.match(/^\/students\/([^/]+)\/checklist$/)) && method === 'POST') {
+      const uid = await requireUser(request, env)
+      const stu = await getAsync('SELECT s.id FROM students s JOIN classes c ON s.class_id=c.id WHERE s.id=? AND c.user_id=?', m[1], uid)
+      if (!stu) return json({ error: '无权限' }, 403)
+      const b = await readBody(request)
+      if (!b.content) return json({ error: '缺少 content' }, 400)
+      const id = uuid()
+      await runAsync('INSERT INTO checklist_items (id, student_id, content, is_done, created_at) VALUES (?,?,?,0,?)', id, m[1], String(b.content).slice(0,120), Date.now())
+      return json({ success: true, id })
+    }
+    if ((m = path.match(/^\/students\/([^/]+)\/checklist\/([^/]+)$/)) && method === 'PUT') {
+      const uid = await requireUser(request, env)
+      const stu = await getAsync('SELECT s.id FROM students s JOIN classes c ON s.class_id=c.id WHERE s.id=? AND c.user_id=?', m[1], uid)
+      if (!stu) return json({ error: '无权限' }, 403)
+      const b = await readBody(request)
+      await runAsync('UPDATE checklist_items SET is_done=? WHERE id=? AND student_id=?', b.is_done ? 1 : 0, m[2], m[1])
+      return json({ success: true })
+    }
+    if ((m = path.match(/^\/students\/([^/]+)\/checklist\/([^/]+)$/)) && method === 'DELETE') {
+      const uid = await requireUser(request, env)
+      const stu = await getAsync('SELECT s.id FROM students s JOIN classes c ON s.class_id=c.id WHERE s.id=? AND c.user_id=?', m[1], uid)
+      if (!stu) return json({ error: '无权限' }, 403)
+      await runAsync('DELETE FROM checklist_items WHERE id=? AND student_id=?', m[2], m[1])
+      return json({ success: true })
+    }
+
+    // ---- 网页端(老师后台): 宠物主人记忆 ----
+    if ((m = path.match(/^\/students\/([^/]+)\/owner-profile$/)) && method === 'GET') {
+      const uid = await requireUser(request, env)
+      const stu = await getAsync('SELECT s.id FROM students s JOIN classes c ON s.class_id=c.id WHERE s.id=? AND c.user_id=?', m[1], uid)
+      if (!stu) return json({ error: '无权限' }, 403)
+      const p = await getOwnerProfile(db, m[1])
+      let profile = null, emotion_log = [], learning_log = []
+      if (p) {
+        try { profile = p.profile_json ? JSON.parse(p.profile_json) : null } catch {}
+        try { emotion_log = p.emotion_log ? JSON.parse(p.emotion_log) : [] } catch {}
+        try { learning_log = p.learning_log ? JSON.parse(p.learning_log) : [] } catch {}
+      }
+      return json({ success: true, profile, emotion_log, learning_log })
+    }
+    if ((m = path.match(/^\/students\/([^/]+)\/owner-profile$/)) && method === 'POST') {
+      const uid = await requireUser(request, env)
+      const stu = await getAsync('SELECT s.id FROM students s JOIN classes c ON s.class_id=c.id WHERE s.id=? AND c.user_id=?', m[1], uid)
+      if (!stu) return json({ error: '无权限' }, 403)
+      const b = await readBody(request)
+      const now = Date.now()
+      let p = await getOwnerProfile(db, m[1])
+      if (!p) {
+        await runAsync('INSERT INTO owner_profiles (student_id, profile_json, emotion_log, learning_log, updated_at) VALUES (?,?,?,?,?)', m[1], null, '[]', '[]', now)
+        p = { profile_json: null, emotion_log: '[]', learning_log: '[]' }
+      }
+      if (b.type === 'profile' && b.data) {
+        await runAsync('UPDATE owner_profiles SET profile_json=?, updated_at=? WHERE student_id=?', JSON.stringify(b.data).slice(0,2000), now, m[1])
+      } else if (b.type === 'emotion' && b.data) {
+        let arr = []
+        try { arr = p.emotion_log ? JSON.parse(p.emotion_log) : [] } catch {}
+        arr.push({ ts: now, ...b.data })
+        if (arr.length > 100) arr = arr.slice(-100)
+        await runAsync('UPDATE owner_profiles SET emotion_log=?, updated_at=? WHERE student_id=?', JSON.stringify(arr), now, m[1])
+      } else if (b.type === 'learning' && b.data) {
+        let arr = []
+        try { arr = p.learning_log ? JSON.parse(p.learning_log) : [] } catch {}
+        arr.push({ ts: now, ...b.data })
+        if (arr.length > 100) arr = arr.slice(-100)
+        await runAsync('UPDATE owner_profiles SET learning_log=?, updated_at=? WHERE student_id=?', JSON.stringify(arr), now, m[1])
+      } else {
+        return json({ error: '未知 type' }, 400)
+      }
       return json({ success: true })
     }
 

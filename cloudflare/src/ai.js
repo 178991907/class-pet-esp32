@@ -2,7 +2,23 @@
 // ASR 用 Workers AI Whisper(keyless)；LLM 用 Workers AI Llama(中文)；TTS 复用 keyless 的 Google TTS 代理(设备直接拉 MP3)。
 
 const WHISPER_MODEL = '@cf/openai/whisper'
-const LLM_MODEL = '@cf/meta/llama-4-scout-17b-16e-instruct'
+// 全部走 Workers AI 免费额度(10k neurons/天)。
+// 为安全占用免费额度、绝不触发付费：意图分类用最小的 3B 模型；宠物闲聊用 8B fp8-fast(比 17B 省 ~5x neuron)。
+// 注意: 切勿换回 llama-4-scout-17b —— 它会快速吃爆每日免费 neuron 导致当天语音 429 失败。
+const INTENT_MODEL = '@cf/meta/llama-3.2-3b-instruct'
+const CHAT_MODEL = '@cf/meta/llama-3.1-8b-instruct-fp8-fast'
+
+// 兼容 Workers AI 多种返回结构(legacy `response` / `text` / OpenAI `choices[].message.content`)
+function extractText(result) {
+  if (!result) return ''
+  const r = result.response || result.text
+  if (r) return r
+  try {
+    return result.choices?.[0]?.message?.content || ''
+  } catch {
+    return ''
+  }
+}
 
 // ============ 工具 ============
 
@@ -48,9 +64,36 @@ export function pcmToWav(pcmChunks, totalBytes, sampleRate = 16000, numChannels 
 // ============ ASR ============
 
 export async function transcribe(env, pcmChunks, totalBytes) {
-  const wav = pcmToWav(pcmChunks, totalBytes)
-  const base64 = arrayBufferToBase64(wav)
-  const result = await env.AI.run(WHISPER_MODEL, { audio: base64 })
+  // 兼容两种输入:
+  //  - Route B(WS 流式): 设备上行裸 PCM 帧 -> 需 pcmToWav 封装
+  //  - Route A(HTTP 回退): 设备直接上传 .wav 文件 -> 已是合法 WAV, 不可再封装(否则双重封装导致 Whisper 解析失败)
+  let wav
+  const first = pcmChunks && pcmChunks[0]
+  const isWav =
+    first &&
+    first.byteLength >= 4 &&
+    (() => {
+      const sig = new Uint8Array(first.slice(0, 4))
+      return sig[0] === 0x52 && sig[1] === 0x49 && sig[2] === 0x46 && sig[3] === 0x46 // "RIFF"
+    })()
+  if (isWav) {
+    const merged = new Uint8Array(totalBytes)
+    let off = 0
+    for (const c of pcmChunks) {
+      const u = new Uint8Array(c)
+      merged.set(u, off)
+      off += u.length
+    }
+    wav = merged.buffer
+  } else {
+    wav = pcmToWav(pcmChunks, totalBytes)
+  }
+  // 注意: @cf/openai/whisper 的输入 schema 为 oneOf:
+  //   - 整体传 base64 二进制字符串, 或
+  //   - { audio: number[] }  (每个元素是 0-255 的原始音频字节, 非 base64 字符串!)
+  // 早期写成 { audio: base64String } 会被校验拒绝 (报 'array' not in 'string'), 导致 ASR 永远失败。
+  const audioBytes = Array.from(new Uint8Array(wav))
+  const result = await env.AI.run(WHISPER_MODEL, { audio: audioBytes })
   return (result && result.text) || ''
 }
 
@@ -75,11 +118,16 @@ JSON 输出格式：
 3. 设定日程提醒，如"周三下午两点半提醒我背单词"、"每天早上八点叫我起床"，action 为 create_schedule。
 4. 其它无法识别或无意义的内容，action 为 none，reply_text 可作简短闲聊回复。`
 
-function buildUserPrompt(text, context) {
-  if (context && context.length) {
-    return `【近期对话记忆, 用于保持连贯, 不要复述已说过的内容】\n${context}\n\n用户现在说: ${text}`
+function buildUserPrompt(text, context, ownerContext) {
+  let prompt = ''
+  if (ownerContext && ownerContext.length) {
+    prompt += `【宠物主人记忆(用于个性化陪伴与帮助学习, 不要原样复述)】\n${ownerContext}\n\n`
   }
-  return text
+  if (context && context.length) {
+    prompt += `【近期对话记忆, 用于保持连贯, 不要复述已说过的内容】\n${context}\n\n`
+  }
+  prompt += `用户现在说: ${text}`
+  return prompt
 }
 
 // 正则降级分类器（大模型不可用时）
@@ -102,13 +150,16 @@ function extractJson(content) {
 }
 
 // 意图分类（大模型优先，失败降级正则）
-export async function classifyIntent(env, text, context = '') {
+export async function classifyIntent(env, text, context = '', ownerContext = '') {
   try {
-    const result = await env.AI.run(LLM_MODEL, {
-      prompt: `${SYSTEM_PROMPT}\n\n${buildUserPrompt(text, context)}`,
+    const result = await env.AI.run(INTENT_MODEL, {
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: buildUserPrompt(text, context, ownerContext) }
+      ],
       temperature: 0.1
     })
-    const content = result?.response || result?.text || ''
+    const content = extractText(result)
     if (!content) throw new Error('empty LLM response')
     return extractJson(content)
   } catch (err) {
@@ -120,15 +171,22 @@ export async function classifyIntent(env, text, context = '') {
 // Web 语音伙伴(宠物闲聊) —— 非结构化对话
 const PET_SYSTEM = `你是小朋友的班级宠物小搭档，名字叫"宠物伙伴"。语气可爱、鼓励、简短(不超过 40 字)，用中文回答。可以陪小朋友聊天、鼓励学习、提醒好习惯。`
 
-export async function petChat(env, message, history = '') {
-  const userContent = history ? `${history}\n小朋友: ${message}` : message
+export async function petChat(env, message, history = '', ownerContext = '') {
+  let system = PET_SYSTEM
+  let userContent = history ? `${history}\n小朋友: ${message}` : message
+  if (ownerContext && ownerContext.length) {
+    system += `\n\n【宠物主人记忆(用于个性化陪伴与帮助学习, 不要原样复述)】\n${ownerContext}`
+  }
   try {
-    const result = await env.AI.run(LLM_MODEL, {
-      prompt: `${PET_SYSTEM}\n\n${userContent}`,
+    const result = await env.AI.run(CHAT_MODEL, {
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: userContent }
+      ],
       temperature: 0.8,
       max_tokens: 120
     })
-    const text = (result?.response || result?.text || '').trim()
+    const text = extractText(result).trim()
     return text || '我听到啦～能再说清楚一点吗？'
   } catch (e) {
     console.warn('⚠️ [AI] petChat 失败, 兜底:', e && e.message)

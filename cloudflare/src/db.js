@@ -58,3 +58,37 @@ export async function setSetting(key, value) {
     v
   )
 }
+
+// ============ 宠物主人记忆 (owner_profiles) ============
+export async function getOwnerProfile(db, studentId) {
+  return await q.get(db, 'SELECT * FROM owner_profiles WHERE student_id = ?', studentId)
+}
+
+// 把 owner_profiles 行转成一段给 LLM 的上下文文本(画像 + 近期情绪 + 近期学习情况)
+export function ownerProfileToContext(profile) {
+  if (!profile) return ''
+  const parts = []
+  if (profile.profile_json) {
+    try {
+      const p = JSON.parse(profile.profile_json)
+      parts.push('【学生画像】' + JSON.stringify(p))
+    } catch {}
+  }
+  if (profile.emotion_log) {
+    try {
+      const arr = JSON.parse(profile.emotion_log)
+      if (Array.isArray(arr) && arr.length) {
+        parts.push('【近期情绪】' + JSON.stringify(arr.slice(-5)))
+      }
+    } catch {}
+  }
+  if (profile.learning_log) {
+    try {
+      const arr = JSON.parse(profile.learning_log)
+      if (Array.isArray(arr) && arr.length) {
+        parts.push('【学习情况】' + JSON.stringify(arr.slice(-5)))
+      }
+    } catch {}
+  }
+  return parts.join('\n')
+}
