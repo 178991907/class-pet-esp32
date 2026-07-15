@@ -424,10 +424,10 @@ onMounted(loadAll)
       <div v-if="loading" class="text-center text-gray-400 py-16">加载中…</div>
 
       <!-- ============ 日历 ============ -->
-      <section v-else-if="activeTab === 'calendar'" class="space-y-4">
+      <section v-else-if="activeTab === 'calendar'" class="flex flex-col gap-4 h-[calc(100vh-180px)] sm:h-[calc(100vh-190px)]">
         <!-- 视图切换 + 导航 -->
-        <div class="bg-white rounded-2xl shadow p-2">
-          <div class="flex items-center justify-between mb-2">
+        <div class="bg-white rounded-2xl shadow p-2 flex flex-col flex-1 min-h-0">
+          <div class="flex items-center justify-between mb-2 shrink-0">
             <div class="flex gap-1 bg-orange-50 rounded-xl p-1">
               <button @click="setCalView('month')" :class="calView==='month' ? 'bg-orange-500 text-white' : 'text-orange-600'" class="px-3 py-1 rounded-lg text-xs font-bold transition-colors">月</button>
               <button @click="setCalView('week')" :class="calView==='week' ? 'bg-orange-500 text-white' : 'text-orange-600'" class="px-3 py-1 rounded-lg text-xs font-bold transition-colors">周</button>
@@ -442,31 +442,31 @@ onMounted(loadAll)
           </div>
 
           <!-- 月视图 -->
-          <div v-if="calView==='month'">
-            <div class="grid grid-cols-7 gap-1 mb-1">
-              <div v-for="w in WEEKDAYS" :key="w" class="text-center text-[10px] font-bold text-gray-400 py-1">{{ w.slice(1) }}</div>
+          <div v-if="calView==='month'" class="flex flex-col flex-1 min-h-0">
+            <div class="grid grid-cols-7 gap-1 mb-1 shrink-0">
+              <div v-for="w in WEEKDAYS" :key="w" class="text-center text-[10px] sm:text-xs font-bold text-gray-400 py-1">{{ w.slice(1) }}</div>
             </div>
-            <div class="grid grid-cols-7 gap-1">
+            <div class="grid grid-cols-7 grid-rows-6 gap-1 flex-1 min-h-0">
               <button
                 v-for="c in monthGrid" :key="c.date"
                 @click="selectDate(c.date)"
-                class="h-10 sm:h-12 rounded-lg flex flex-col items-center justify-center text-xs transition-all relative"
+                class="h-full w-full min-h-0 rounded-lg flex flex-col items-center justify-center transition-all relative overflow-hidden"
                 :class="[
                   c.inMonth ? 'bg-white' : 'bg-gray-50',
                   c.isSelected ? 'ring-2 ring-orange-500 bg-orange-50' : 'hover:bg-orange-50',
                   !c.inMonth && 'text-gray-300'
                 ]"
               >
-                <span :class="c.isToday ? 'bg-rose-500 text-white w-5 h-5 rounded-full flex items-center justify-center font-bold text-xs' : 'font-medium text-gray-700 text-xs'">{{ c.day }}</span>
-                <span v-if="c.events.length" class="absolute bottom-1 flex gap-0.5">
-                  <span v-for="n in Math.min(c.events.length,3)" :key="n" class="w-1 h-1 rounded-full bg-orange-400"></span>
+                <span :class="c.isToday ? 'bg-rose-500 text-white w-5 h-5 sm:w-6 sm:h-6 rounded-full flex items-center justify-center font-bold text-xs sm:text-sm' : 'font-medium text-gray-700 text-xs sm:text-sm'">{{ c.day }}</span>
+                <span v-if="c.events.length" class="absolute bottom-1 sm:bottom-2 flex gap-0.5">
+                  <span v-for="n in Math.min(c.events.length,3)" :key="n" class="w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full bg-orange-400"></span>
                 </span>
               </button>
             </div>
           </div>
 
           <!-- 周视图 -->
-          <div v-else-if="calView==='week'" class="space-y-2">
+          <div v-else-if="calView==='week'" class="overflow-y-auto flex-1 min-h-0 space-y-2">
             <button
               v-for="d in weekDays" :key="d.date"
               @click="selectDate(d.date)"
@@ -485,7 +485,7 @@ onMounted(loadAll)
           </div>
 
           <!-- 日视图 -->
-          <div v-else class="space-y-2">
+          <div v-else class="overflow-y-auto flex-1 min-h-0 space-y-2">
             <div class="text-center text-sm font-bold text-gray-600 py-1">{{ selectedLabel }}</div>
             <div v-if="dayEvents.length===0" class="text-center text-gray-300 text-sm py-6">这一天还没有安排</div>
             <TransitionGroup name="pop" tag="div" class="space-y-2">
@@ -502,7 +502,7 @@ onMounted(loadAll)
         </div>
 
         <!-- 选中日期的事件 + 快速添加 -->
-        <div class="bg-white rounded-2xl shadow p-3 space-y-3">
+        <div class="bg-white rounded-2xl shadow p-3 space-y-3 shrink-0 max-h-[220px] overflow-y-auto">
           <div class="font-bold text-gray-700 flex items-center gap-2 text-sm">📌 {{ selectedLabel }} 的安排</div>
           <div v-if="dayEvents.length===0" class="text-sm text-gray-300 py-2">还没有安排，下面添加一条吧</div>
           <div v-for="ev in dayEvents" :key="'l'+ev.id" class="flex items-center gap-2 text-sm">
