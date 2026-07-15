@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAuth } from '@/composables/useAuth'
 import { useStudentStore } from '@/stores/useStudentStore'
 import { useToast } from '@/composables/useToast'
+import { playChime } from '@/utils/sound'
 import type { CalendarEvent, ChecklistItem, Schedule, OwnerProfile } from '@/types'
 
 const route = useRoute()
@@ -28,6 +29,9 @@ function daysFromMask(mask: number) {
   for (let i = 0; i < 7; i++) if (mask & (1 << i)) list.push(i)
   return list
 }
+function firstDayOfMask(mask: number) {
+  return daysFromMask(mask)[0] ?? 1
+}
 
 // ===== 标签 =====
 type TabKey = 'calendar' | 'checklist' | 'alarm' | 'memory'
@@ -46,15 +50,120 @@ const tabs: { key: TabKey; label: string; icon: string }[] = [
 // ===== 加载态 =====
 const loading = ref(false)
 
-// ===== 日历 =====
+// ===== 日历：月/周/日视图 =====
 const calendar = ref<CalendarEvent[]>([])
 const calForm = ref({ title: '', event_date: '', time_str: '', description: '' })
 const calAdding = ref(false)
 
-// ===== 清单 =====
+const calView = ref<'month' | 'week' | 'day'>('month')
+const calCursor = ref(new Date())
+const selectedDate = ref(toYMD(new Date()))
+
+const todayStr = computed(() => toYMD(new Date()))
+const cursorLabel = computed(() => {
+  const d = calCursor.value
+  if (calView.value === 'month') return `${d.getFullYear()} 年 ${d.getMonth() + 1} 月`
+  if (calView.value === 'week') {
+    const ws = weekStart(d)
+    const we = new Date(ws); we.setDate(ws.getDate() + 6)
+    return `${ws.getMonth() + 1}月${ws.getDate()}日 – ${we.getMonth() + 1}月${we.getDate()}日`
+  }
+  return `${d.getFullYear()} 年 ${d.getMonth() + 1} 月 ${d.getDate()} 日`
+})
+
+function toYMD(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+function weekStart(d: Date): Date {
+  const r = new Date(d)
+  r.setDate(d.getDate() - d.getDay())
+  r.setHours(0, 0, 0, 0)
+  return r
+}
+
+const monthGrid = computed(() => {
+  const cur = calCursor.value
+  const first = new Date(cur.getFullYear(), cur.getMonth(), 1)
+  const start = new Date(first)
+  start.setDate(first.getDate() - first.getDay())
+  const cells = []
+  for (let i = 0; i < 42; i++) {
+    const d = new Date(start)
+    d.setDate(start.getDate() + i)
+    const ds = toYMD(d)
+    cells.push({
+      date: ds,
+      day: d.getDate(),
+      inMonth: d.getMonth() === cur.getMonth(),
+      isToday: ds === todayStr.value,
+      isSelected: ds === selectedDate.value,
+      events: calendar.value.filter(e => e.event_date === ds)
+    })
+  }
+  return cells
+})
+
+const weekDays = computed(() => {
+  const ws = weekStart(calCursor.value)
+  const arr = []
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(ws); d.setDate(ws.getDate() + i)
+    const ds = toYMD(d)
+    arr.push({
+      date: ds, day: d.getDate(), dow: d.getDay(),
+      isToday: ds === todayStr.value, isSelected: ds === selectedDate.value,
+      events: calendar.value.filter(e => e.event_date === ds)
+    })
+  }
+  return arr
+})
+
+const dayEvents = computed(() => calendar.value.filter(e => e.event_date === selectedDate.value))
+const selectedLabel = computed(() => {
+  const [, m, d] = selectedDate.value.split('-')
+  return `${Number(m)}月${Number(d)}日 ${WEEKDAYS[new Date(selectedDate.value).getDay()]}`
+})
+
+function calNav(dir: number) {
+  const c = new Date(calCursor.value)
+  if (calView.value === 'month') c.setMonth(c.getMonth() + dir)
+  else if (calView.value === 'week') c.setDate(c.getDate() + dir * 7)
+  else c.setDate(c.getDate() + dir)
+  calCursor.value = c
+  if (calView.value === 'day') selectedDate.value = toYMD(c)
+}
+function selectDate(ds: string) {
+  selectedDate.value = ds
+  calForm.value.event_date = ds
+  const [y, m] = ds.split('-').map(Number)
+  if (calView.value === 'month' && (calCursor.value.getFullYear() !== y || calCursor.value.getMonth() + 1 !== m)) {
+    calCursor.value = new Date(y, m - 1, 1)
+  }
+}
+function setCalView(v: 'month' | 'week' | 'day') {
+  calView.value = v
+  if (v === 'day') selectedDate.value = selectedDate.value || toYMD(new Date())
+}
+function goToday() {
+  calCursor.value = new Date()
+  selectedDate.value = toYMD(new Date())
+}
+
+// ===== 清单：每日待办感 =====
 const checklist = ref<ChecklistItem[]>([])
 const listForm = ref({ content: '' })
 const listAdding = ref(false)
+const showDone = ref(false)
+
+const activeItems = computed(() => checklist.value.filter(i => !i.is_done))
+const doneItems = computed(() => checklist.value.filter(i => i.is_done))
+const todayLabel = computed(() => {
+  const d = new Date()
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${WEEKDAYS[d.getDay()]}`
+})
 
 // ===== 闹铃 =====
 const alarms = ref<Schedule[]>([])
@@ -88,7 +197,6 @@ async function loadAll() {
       emotion_log: memRes.data.emotion_log || [],
       learning_log: memRes.data.learning_log || []
     }
-    // 画像表单回填
     if (memory.value.profile) {
       profileForm.value = {
         grade: memory.value.profile.grade || '',
@@ -113,6 +221,7 @@ async function addCalendar() {
   calAdding.value = true
   try {
     await api.post(`/students/${studentId.value}/calendar`, { ...calForm.value })
+    playChime('calendar')
     toast.success('已添加日历事件')
     calForm.value = { title: '', event_date: '', time_str: '', description: '' }
     await loadAll()
@@ -141,6 +250,7 @@ async function addChecklist() {
   listAdding.value = true
   try {
     await api.post(`/students/${studentId.value}/checklist`, { ...listForm.value })
+    playChime('checklist')
     toast.success('已添加到清单')
     listForm.value = { content: '' }
     await loadAll()
@@ -154,6 +264,7 @@ async function toggleChecklist(item: ChecklistItem) {
   try {
     await api.put(`/students/${studentId.value}/checklist/${item.id}`, { is_done: item.is_done ? 0 : 1 })
     item.is_done = item.is_done ? 0 : 1
+    if (item.is_done) playChime('checklist')
   } catch (e: any) {
     toast.error('更新失败：' + (e?.response?.data?.error || e.message))
   }
@@ -177,10 +288,13 @@ async function addAlarm() {
   alarmAdding.value = true
   try {
     await api.post(`/device/schedules/student/${studentId.value}`, {
+      // 旧后端只认 day_of_week（取掩码首个选中日作回退），新后端优先 days_of_week
+      day_of_week: firstDayOfMask(alarmForm.value.days_of_week),
       days_of_week: alarmForm.value.days_of_week,
       time_str: alarmForm.value.time_str,
       task_desc: alarmForm.value.task_desc
     })
+    playChime('alarm')
     toast.success('已添加闹铃')
     alarmForm.value = { days_of_week: 0b0111110, time_str: '08:00', task_desc: '' }
     await loadAll()
@@ -287,52 +401,145 @@ onMounted(loadAll)
     <main class="flex-1 overflow-auto p-4 pb-12">
       <div v-if="loading" class="text-center text-gray-400 py-16">加载中…</div>
 
-      <!-- 日历 -->
+      <!-- ============ 日历 ============ -->
       <section v-else-if="activeTab === 'calendar'" class="space-y-4">
-        <div class="bg-white rounded-2xl shadow p-4 space-y-3">
-          <div class="font-bold text-gray-700 flex items-center gap-2">➕ 添加日历事件</div>
-          <input v-model="calForm.title" placeholder="事件标题（如：数学考试）" class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
-          <div class="flex gap-2">
-            <input v-model="calForm.event_date" type="date" class="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
-            <input v-model="calForm.time_str" type="time" class="w-32 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
+        <!-- 视图切换 + 导航 -->
+        <div class="bg-white rounded-2xl shadow p-3">
+          <div class="flex items-center justify-between mb-3">
+            <div class="flex gap-1 bg-orange-50 rounded-xl p-1">
+              <button @click="setCalView('month')" :class="calView==='month' ? 'bg-orange-500 text-white' : 'text-orange-600'" class="px-3 py-1 rounded-lg text-xs font-bold transition-colors">月</button>
+              <button @click="setCalView('week')" :class="calView==='week' ? 'bg-orange-500 text-white' : 'text-orange-600'" class="px-3 py-1 rounded-lg text-xs font-bold transition-colors">周</button>
+              <button @click="setCalView('day')" :class="calView==='day' ? 'bg-orange-500 text-white' : 'text-orange-600'" class="px-3 py-1 rounded-lg text-xs font-bold transition-colors">日</button>
+            </div>
+            <div class="flex items-center gap-2">
+              <button @click="goToday" class="text-xs px-2 py-1 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200">今天</button>
+              <button @click="calNav(-1)" class="w-8 h-8 rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 flex items-center justify-center">‹</button>
+              <span class="text-sm font-bold text-gray-700 min-w-[120px] text-center">{{ cursorLabel }}</span>
+              <button @click="calNav(1)" class="w-8 h-8 rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200 flex items-center justify-center">›</button>
+            </div>
           </div>
-          <input v-model="calForm.description" placeholder="备注（可选）" class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
-          <button @click="addCalendar" :disabled="calAdding" class="w-full bg-gradient-to-r from-orange-400 to-pink-500 text-white font-bold py-2.5 rounded-xl hover:shadow-lg transition-all disabled:opacity-50">添加</button>
+
+          <!-- 月视图 -->
+          <div v-if="calView==='month'">
+            <div class="grid grid-cols-7 gap-1 mb-1">
+              <div v-for="w in WEEKDAYS" :key="w" class="text-center text-xs font-bold text-gray-400 py-1">{{ w.slice(1) }}</div>
+            </div>
+            <div class="grid grid-cols-7 gap-1">
+              <button
+                v-for="c in monthGrid" :key="c.date"
+                @click="selectDate(c.date)"
+                class="aspect-square rounded-xl flex flex-col items-center justify-center text-sm transition-all relative"
+                :class="[
+                  c.inMonth ? 'bg-white' : 'bg-gray-50',
+                  c.isSelected ? 'ring-2 ring-orange-500 bg-orange-50' : 'hover:bg-orange-50',
+                  !c.inMonth && 'text-gray-300'
+                ]"
+              >
+                <span :class="c.isToday ? 'bg-rose-500 text-white w-6 h-6 rounded-full flex items-center justify-center font-bold' : 'font-medium text-gray-700'">{{ c.day }}</span>
+                <span v-if="c.events.length" class="absolute bottom-1 flex gap-0.5">
+                  <span v-for="n in Math.min(c.events.length,3)" :key="n" class="w-1 h-1 rounded-full bg-orange-400"></span>
+                </span>
+              </button>
+            </div>
+          </div>
+
+          <!-- 周视图 -->
+          <div v-else-if="calView==='week'" class="space-y-2">
+            <button
+              v-for="d in weekDays" :key="d.date"
+              @click="selectDate(d.date)"
+              class="w-full rounded-xl p-3 flex items-center gap-3 text-left transition-all"
+              :class="d.isSelected ? 'ring-2 ring-orange-500 bg-orange-50' : 'bg-white hover:bg-orange-50'"
+            >
+              <div class="text-center min-w-[44px]">
+                <div class="text-xs text-gray-400">{{ WEEKDAY_SHORT[d.dow] }}</div>
+                <div :class="d.isToday ? 'bg-rose-500 text-white w-8 h-8 rounded-full flex items-center justify-center font-bold' : 'text-lg font-bold text-gray-700'">{{ d.day }}</div>
+              </div>
+              <div class="flex-1 min-w-0">
+                <div v-if="d.events.length===0" class="text-sm text-gray-300">无安排</div>
+                <div v-for="ev in d.events" :key="ev.id" class="text-sm text-gray-700 truncate">🕐 {{ ev.time_str || '全天' }} {{ ev.title }}</div>
+              </div>
+            </button>
+          </div>
+
+          <!-- 日视图 -->
+          <div v-else class="space-y-2">
+            <div class="text-center text-sm font-bold text-gray-600 py-1">{{ selectedLabel }}</div>
+            <div v-if="dayEvents.length===0" class="text-center text-gray-300 text-sm py-6">这一天还没有安排</div>
+            <TransitionGroup name="pop" tag="div" class="space-y-2">
+              <div v-for="ev in dayEvents" :key="ev.id" class="bg-white rounded-xl shadow p-3 flex items-center gap-3">
+                <div class="text-xs text-orange-500 font-bold min-w-[40px]">{{ ev.time_str || '全天' }}</div>
+                <div class="flex-1 min-w-0">
+                  <div class="font-bold text-gray-800">{{ ev.title }}</div>
+                  <div v-if="ev.description" class="text-xs text-gray-500">{{ ev.description }}</div>
+                </div>
+                <button @click="delCalendar(ev.id)" class="text-red-400 hover:text-red-600 text-xs px-2">删除</button>
+              </div>
+            </TransitionGroup>
+          </div>
         </div>
 
-        <div v-if="calendar.length === 0" class="text-center text-gray-400 py-10">还没有日历事件</div>
-        <div
-          v-for="ev in calendar" :key="ev.id"
-          class="bg-white rounded-2xl shadow p-4 flex items-start gap-3 hover:shadow-md transition-shadow"
-        >
-          <div class="min-w-[52px] text-center bg-orange-50 rounded-xl py-2">
-            <div class="text-xs text-orange-500 font-bold">{{ ev.event_date.slice(5) }}</div>
-            <div class="text-xs text-gray-500">{{ ev.time_str || '全天' }}</div>
+        <!-- 选中日期的事件 + 快速添加 -->
+        <div class="bg-white rounded-2xl shadow p-4 space-y-3">
+          <div class="font-bold text-gray-700 flex items-center gap-2">📌 {{ selectedLabel }} 的安排</div>
+          <div v-if="dayEvents.length===0" class="text-sm text-gray-300 py-2">还没有安排，下面添加一条吧</div>
+          <div v-for="ev in dayEvents" :key="'l'+ev.id" class="flex items-center gap-2 text-sm">
+            <span class="text-orange-500 font-bold min-w-[40px]">{{ ev.time_str || '全天' }}</span>
+            <span class="flex-1 text-gray-700 truncate">{{ ev.title }}</span>
+            <button @click="delCalendar(ev.id)" class="text-red-400 hover:text-red-600 text-xs">删</button>
           </div>
-          <div class="flex-1 min-w-0">
-            <div class="font-bold text-gray-800">{{ ev.title }}</div>
-            <div v-if="ev.description" class="text-sm text-gray-500 mt-0.5">{{ ev.description }}</div>
+          <div class="border-t pt-3 space-y-2">
+            <div class="font-medium text-gray-600 text-sm">➕ 在 {{ selectedLabel }} 添加事件</div>
+            <input v-model="calForm.title" placeholder="事件标题（如：数学考试）" class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
+            <div class="flex gap-2">
+              <input v-model="calForm.event_date" type="date" class="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
+              <input v-model="calForm.time_str" type="time" class="w-32 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
+            </div>
+            <input v-model="calForm.description" placeholder="备注（可选）" class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
+            <button @click="addCalendar" :disabled="calAdding" class="w-full bg-gradient-to-r from-orange-400 to-pink-500 text-white font-bold py-2.5 rounded-xl hover:shadow-lg transition-all disabled:opacity-50">添加事件</button>
           </div>
-          <button @click="delCalendar(ev.id)" class="text-red-400 hover:text-red-600 text-sm px-2">删除</button>
         </div>
       </section>
 
-      <!-- 清单 -->
+      <!-- ============ 清单 ============ -->
       <section v-else-if="activeTab === 'checklist'" class="space-y-4">
+        <div class="bg-white rounded-2xl shadow p-4 flex flex-col gap-1">
+          <div class="text-sm font-bold text-gray-700">📋 我的每日清单</div>
+          <div class="text-xs text-gray-400">今天 · {{ todayLabel }} · 共 {{ checklist.length }} 项，已完成 {{ doneItems.length }} 项</div>
+        </div>
+
         <div class="bg-white rounded-2xl shadow p-4 flex gap-2">
           <input v-model="listForm.content" @keyup.enter="addChecklist" placeholder="添加待办事项…" class="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
           <button @click="addChecklist" :disabled="listAdding" class="bg-gradient-to-r from-orange-400 to-pink-500 text-white font-bold px-5 rounded-xl hover:shadow-lg transition-all disabled:opacity-50">添加</button>
         </div>
-        <div v-if="checklist.length === 0" class="text-center text-gray-400 py-10">清单是空的，加一条吧！</div>
-        <div v-for="item in checklist" :key="item.id" class="bg-white rounded-2xl shadow p-4 flex items-center gap-3">
-          <button @click="toggleChecklist(item)" class="w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all"
-            :class="item.is_done ? 'bg-green-500 border-green-500 text-white' : 'border-gray-300 text-transparent'">✓</button>
-          <div class="flex-1" :class="item.is_done ? 'line-through text-gray-400' : 'text-gray-800'">{{ item.content }}</div>
-          <button @click="delChecklist(item.id)" class="text-red-400 hover:text-red-600 text-sm px-2">删除</button>
+
+        <!-- 未完成 -->
+        <div v-if="activeItems.length===0" class="text-center text-gray-400 py-8">🎉 今天的待办都清空啦！</div>
+        <TransitionGroup name="pop" tag="div" class="space-y-3">
+          <div v-for="item in activeItems" :key="item.id" class="bg-white rounded-2xl shadow p-4 flex items-center gap-3">
+            <button @click="toggleChecklist(item)" class="w-6 h-6 rounded-full border-2 border-orange-300 flex items-center justify-center text-transparent hover:bg-orange-50 transition-all">✓</button>
+            <div class="flex-1 text-gray-800">{{ item.content }}</div>
+            <button @click="delChecklist(item.id)" class="text-red-400 hover:text-red-600 text-sm px-2">删除</button>
+          </div>
+        </TransitionGroup>
+
+        <!-- 已完成（折叠） -->
+        <div v-if="doneItems.length" class="space-y-2">
+          <button @click="showDone=!showDone" class="w-full text-left text-sm text-gray-500 bg-white/70 rounded-xl px-4 py-2 hover:bg-white transition-colors flex items-center justify-between">
+            <span>✅ 已完成（{{ doneItems.length }}）</span>
+            <span>{{ showDone ? '收起 ▲' : '展开 ▼' }}</span>
+          </button>
+          <TransitionGroup v-if="showDone" name="pop" tag="div" class="space-y-2">
+            <div v-for="item in doneItems" :key="item.id" class="bg-gray-50 rounded-2xl p-4 flex items-center gap-3 opacity-70">
+              <button @click="toggleChecklist(item)" class="w-6 h-6 rounded-full border-2 bg-green-500 border-green-500 flex items-center justify-center text-white transition-all">✓</button>
+              <div class="flex-1 line-through text-gray-400">{{ item.content }}</div>
+              <button @click="delChecklist(item.id)" class="text-red-400 hover:text-red-600 text-sm px-2">删除</button>
+            </div>
+          </TransitionGroup>
         </div>
       </section>
 
-      <!-- 闹铃 -->
+      <!-- ============ 闹铃 ============ -->
       <section v-else-if="activeTab === 'alarm'" class="space-y-4">
         <div class="bg-white rounded-2xl shadow p-4 space-y-3">
           <div class="font-bold text-gray-700 flex items-center gap-2">➕ 添加定时闹铃</div>
@@ -344,6 +551,11 @@ onMounted(loadAll)
               :class="alarmForm.days_of_week === p.mask ? 'bg-orange-500 text-white' : 'bg-orange-50 text-orange-600 hover:bg-orange-100'"
               class="px-3 py-1 rounded-full text-xs font-medium transition-colors"
             >{{ p.label }}</button>
+            <button
+              @click="alarmForm.days_of_week = 0"
+              :class="alarmForm.days_of_week === 0 ? 'bg-gray-500 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'"
+              class="px-3 py-1 rounded-full text-xs font-medium transition-colors"
+            >自定义</button>
           </div>
           <!-- 星期多选 -->
           <div class="flex gap-1.5 justify-between">
@@ -354,35 +566,39 @@ onMounted(loadAll)
               class="flex-1 py-2 rounded-xl text-xs font-bold transition-all"
             >{{ WEEKDAY_SHORT[i] }}</button>
           </div>
-          <div class="flex gap-2">
-            <input v-model="alarmForm.time_str" type="time" class="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
-          </div>
+          <input v-model="alarmForm.time_str" type="time" class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
           <input v-model="alarmForm.task_desc" placeholder="提醒内容（如：起床、练琴、交作业）" class="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-300" />
-          <button @click="addAlarm" :disabled="alarmAdding" class="w-full bg-gradient-to-r from-orange-400 to-pink-500 text-white font-bold py-2.5 rounded-xl hover:shadow-lg transition-all disabled:opacity-50">添加</button>
+          <button @click="addAlarm" :disabled="alarmAdding" class="w-full bg-gradient-to-r from-orange-400 to-pink-500 text-white font-bold py-2.5 rounded-xl hover:shadow-lg transition-all disabled:opacity-50">添加闹铃</button>
         </div>
+
         <div v-if="alarms.length === 0" class="text-center text-gray-400 py-10">还没有定时闹铃</div>
-        <div
-          v-for="a in alarms" :key="a.id"
-          class="bg-white rounded-2xl shadow p-4 flex items-center gap-4"
-        >
-          <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-orange-400 to-pink-500 flex flex-col items-center justify-center text-white shadow">
-            <div class="text-[10px] opacity-90">⏰</div>
-            <div class="text-lg font-bold leading-none">{{ a.time_str }}</div>
-          </div>
-          <div class="flex-1 min-w-0">
-            <div class="font-bold text-gray-800">{{ a.task_desc }}</div>
-            <div class="flex flex-wrap gap-1 mt-1.5">
-              <span
-                v-for="d in daysFromMask(a.days_of_week || 0)" :key="d"
-                class="px-2 py-0.5 rounded-full bg-orange-50 text-orange-600 text-xs font-medium"
-              >周{{ WEEKDAY_SHORT[d] }}</span>
+        <TransitionGroup name="pop" tag="div" class="space-y-3">
+          <div
+            v-for="a in alarms" :key="a.id"
+            class="bg-white rounded-2xl shadow p-4 flex items-center gap-4"
+          >
+            <div class="w-14 h-14 rounded-2xl bg-gradient-to-br from-orange-400 to-pink-500 flex flex-col items-center justify-center text-white shadow">
+              <div class="text-[10px] opacity-90">⏰</div>
+              <div class="text-lg font-bold leading-none">{{ a.time_str }}</div>
             </div>
+            <div class="flex-1 min-w-0">
+              <div class="font-bold text-gray-800">{{ a.task_desc }}</div>
+              <div class="flex flex-wrap gap-1 mt-1.5">
+                <span
+                  v-for="d in daysFromMask(a.days_of_week || 0)" :key="d"
+                  class="px-2 py-0.5 rounded-full bg-orange-50 text-orange-600 text-xs font-medium"
+                >周{{ WEEKDAY_SHORT[d] }}</span>
+                <span v-if="(a.days_of_week||0)===0b1111111" class="px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 text-xs font-medium">每天</span>
+                <span v-else-if="(a.days_of_week||0)===0b0111110" class="px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 text-xs font-medium">工作日</span>
+                <span v-else-if="(a.days_of_week||0)===0b1000001" class="px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 text-xs font-medium">周末</span>
+              </div>
+            </div>
+            <button @click="delAlarm(a.id)" class="text-red-400 hover:text-red-600 text-sm px-2">删除</button>
           </div>
-          <button @click="delAlarm(a.id)" class="text-red-400 hover:text-red-600 text-sm px-2">删除</button>
-        </div>
+        </TransitionGroup>
       </section>
 
-      <!-- 主人记忆 -->
+      <!-- ============ 主人记忆 ============ -->
       <section v-else-if="activeTab === 'memory'" class="space-y-4">
         <!-- 用户画像 -->
         <div class="bg-white rounded-2xl shadow p-4 space-y-3">
@@ -437,3 +653,16 @@ onMounted(loadAll)
     </main>
   </div>
 </template>
+
+<style scoped>
+.pop-enter-active {
+  animation: pop-in 0.32s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.pop-leave-active {
+  animation: pop-in 0.2s reverse;
+}
+@keyframes pop-in {
+  0% { opacity: 0; transform: translateY(8px) scale(0.96); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+</style>
