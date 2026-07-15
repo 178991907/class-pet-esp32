@@ -45,6 +45,52 @@ function firstDayOfMask(mask) {
   }
   return 0
 }
+function shanghaiToday(now = new Date()) {
+  const sh = new Date(now.getTime() + 8 * 60 * 60 * 1000)
+  const y = sh.getUTCFullYear()
+  const m = String(sh.getUTCMonth() + 1).padStart(2, '0')
+  const d = String(sh.getUTCDate()).padStart(2, '0')
+  return { dateStr: `${y}-${m}-${d}`, weekday: sh.getUTCDay() }
+}
+async function buildTodayResponse(studentId, dateStr, weekday) {
+  const alarms = await allAsync(
+    'SELECT id, time_str, task_desc, days_of_week FROM schedules WHERE student_id=? AND is_active=1 AND (days_of_week & ?) != 0 ORDER BY time_str ASC',
+    studentId, 1 << weekday
+  )
+  const events = await allAsync(
+    'SELECT id, title, event_date, time_str, description FROM calendar_events WHERE student_id=? AND event_date=? ORDER BY time_str IS NULL, time_str ASC, created_at ASC',
+    studentId, dateStr
+  )
+  const items = await allAsync(
+    'SELECT id, content, is_done, target_date, source_id, source_type, created_at FROM checklist_items WHERE student_id=? AND (target_date=? OR target_date IS NULL) ORDER BY is_done ASC, created_at ASC',
+    studentId, dateStr
+  )
+  // 与日历事件同步的清单项用于承载完成状态
+  const syncedBySource = {}
+  const manualItems = []
+  for (const i of items) {
+    if (i.source_type === 'calendar_events' && i.source_id) {
+      syncedBySource[i.source_id] = i
+    } else {
+      manualItems.push(i)
+    }
+  }
+  const merged = [
+    ...alarms.map(a => ({ type: 'alarm', id: a.id, time_str: a.time_str, title: a.task_desc, is_done: false, source_id: a.id, source_type: 'schedules' })),
+    ...events.map(e => {
+      const synced = syncedBySource[e.id]
+      return { type: 'calendar', id: e.id, time_str: e.time_str, title: e.title, is_done: !!synced?.is_done, source_id: e.id, source_type: 'calendar_events', checklist_id: synced?.id || null }
+    }),
+    ...manualItems.map(i => ({ type: 'checklist', id: i.id, time_str: null, title: i.content, is_done: !!i.is_done, source_id: i.source_id, source_type: i.source_type || 'checklist_items' }))
+  ]
+  merged.sort((a, b) => {
+    if (a.time_str === b.time_str) return 0
+    if (!a.time_str) return 1
+    if (!b.time_str) return -1
+    return a.time_str.localeCompare(b.time_str)
+  })
+  return { date: dateStr, weekday, items: merged }
+}
 function normalize(pathname) {
   let p = pathname
   if (p.startsWith('/pet-garden')) p = p.slice('/pet-garden'.length)
@@ -823,7 +869,12 @@ async function handleApi(request, env, ctx) {
       const b = await readBody(request)
       if (!b.title || !b.event_date) return json({ error: '缺少 title 或 event_date' }, 400)
       const id = uuid()
-      await runAsync('INSERT INTO calendar_events (id, student_id, title, event_date, time_str, description, created_at) VALUES (?,?,?,?,?,?,?)', id, sid, String(b.title).slice(0,80), String(b.event_date).slice(0,10), b.time_str ? String(b.time_str).slice(0,5) : null, b.description ? String(b.description).slice(0,200) : '', Date.now())
+      const title = String(b.title).slice(0, 80)
+      const eventDate = String(b.event_date).slice(0, 10)
+      await runAsync('INSERT INTO calendar_events (id, student_id, title, event_date, time_str, description, created_at) VALUES (?,?,?,?,?,?,?)', id, sid, title, eventDate, b.time_str ? String(b.time_str).slice(0,5) : null, b.description ? String(b.description).slice(0,200) : '', Date.now())
+      // 同步到今日清单
+      const checkId = uuid()
+      await runAsync('INSERT INTO checklist_items (id, student_id, content, is_done, target_date, source_id, source_type, created_at) VALUES (?,?,?,0,?,?,?,?)', checkId, sid, title, eventDate, id, 'calendar_events', Date.now())
       return json({ success: true, id })
     }
     if ((m = path.match(/^\/device\/calendar\/([^/]+)$/)) && method === 'DELETE') {
@@ -831,6 +882,7 @@ async function handleApi(request, env, ctx) {
       const sid = await studentIdByDevice(deviceId)
       if (!sid) return json({ status: 'unbound', error: '未绑定' }, 400)
       await runAsync('DELETE FROM calendar_events WHERE id=? AND student_id=?', m[1], sid)
+      await runAsync('DELETE FROM checklist_items WHERE source_id=? AND source_type=? AND student_id=?', m[1], 'calendar_events', sid)
       return json({ success: true })
     }
     if ((m = path.match(/^\/device\/calendar\/([^/]+)$/)) && method === 'PUT') {
@@ -840,13 +892,23 @@ async function handleApi(request, env, ctx) {
       const b = await readBody(request)
       const updates = []
       const vals = []
-      if (b.title !== undefined) { updates.push('title=?'); vals.push(String(b.title).slice(0, 80)) }
-      if (b.event_date !== undefined) { updates.push('event_date=?'); vals.push(String(b.event_date).slice(0, 10)) }
+      let syncTitle = null, syncDate = null
+      if (b.title !== undefined) { updates.push('title=?'); vals.push(String(b.title).slice(0, 80)); syncTitle = String(b.title).slice(0, 80) }
+      if (b.event_date !== undefined) { updates.push('event_date=?'); vals.push(String(b.event_date).slice(0, 10)); syncDate = String(b.event_date).slice(0, 10) }
       if (b.time_str !== undefined) { updates.push('time_str=?'); vals.push(b.time_str ? String(b.time_str).slice(0, 5) : null) }
       if (b.description !== undefined) { updates.push('description=?'); vals.push(String(b.description).slice(0, 200)) }
       if (!updates.length) return json({ error: '无有效字段' }, 400)
       vals.push(m[1], sid)
       await runAsync(`UPDATE calendar_events SET ${updates.join(', ')} WHERE id=? AND student_id=?`, ...vals)
+      // 同步更新清单项
+      if (syncTitle || syncDate) {
+        const checkUpdates = []
+        const checkVals = []
+        if (syncTitle) { checkUpdates.push('content=?'); checkVals.push(syncTitle) }
+        if (syncDate) { checkUpdates.push('target_date=?'); checkVals.push(syncDate) }
+        checkVals.push(m[1], 'calendar_events', sid)
+        await runAsync(`UPDATE checklist_items SET ${checkUpdates.join(', ')} WHERE source_id=? AND source_type=? AND student_id=?`, ...checkVals)
+      }
       return json({ success: true })
     }
 
@@ -856,7 +918,7 @@ async function handleApi(request, env, ctx) {
       const sid = await studentIdByDevice(deviceId)
       if (!sid) return json({ status: 'unbound', items: [] })
       await runAsync('UPDATE students SET last_seen=? WHERE id=?', Date.now(), sid)
-      const items = await allAsync('SELECT id, content, is_done, created_at FROM checklist_items WHERE student_id=? ORDER BY is_done ASC, created_at ASC', sid)
+      const items = await allAsync('SELECT id, content, is_done, target_date, source_id, source_type, created_at FROM checklist_items WHERE student_id=? ORDER BY is_done ASC, created_at ASC', sid)
       return json({ status: 'ok', items })
     }
     if (path === '/device/checklist' && method === 'POST') {
@@ -866,7 +928,8 @@ async function handleApi(request, env, ctx) {
       const b = await readBody(request)
       if (!b.content) return json({ error: '缺少 content' }, 400)
       const id = uuid()
-      await runAsync('INSERT INTO checklist_items (id, student_id, content, is_done, created_at) VALUES (?,?,?,0,?)', id, sid, String(b.content).slice(0,120), Date.now())
+      const targetDate = b.target_date ? String(b.target_date).slice(0, 10) : shanghaiToday().dateStr
+      await runAsync('INSERT INTO checklist_items (id, student_id, content, is_done, target_date, created_at) VALUES (?,?,?,0,?,?)', id, sid, String(b.content).slice(0,120), targetDate, Date.now())
       return json({ success: true, id })
     }
     if ((m = path.match(/^\/device\/checklist\/([^/]+)$/)) && method === 'PUT') {
@@ -889,6 +952,28 @@ async function handleApi(request, env, ctx) {
       if (!sid) return json({ status: 'unbound', error: '未绑定' }, 400)
       await runAsync('DELETE FROM checklist_items WHERE id=? AND student_id=?', m[1], sid)
       return json({ success: true })
+    }
+
+    // ---- 设备端: 今日聚合 (日历+闹铃+清单) ----
+    if (path === '/device/today' && method === 'GET') {
+      const deviceId = getDeviceId(request)
+      const sid = await studentIdByDevice(deviceId)
+      if (!sid) return json({ status: 'unbound', items: [] })
+      await runAsync('UPDATE students SET last_seen=? WHERE id=?', Date.now(), sid)
+      const url = new URL(request.url)
+      const dateParam = url.searchParams.get('date')
+      const weekdayParam = url.searchParams.get('weekday')
+      let dateStr, weekday
+      if (dateParam) {
+        dateStr = dateParam
+        weekday = Number(weekdayParam ?? (new Date(dateParam).getDay() || 7) % 7)
+      } else {
+        const today = shanghaiToday()
+        dateStr = today.dateStr
+        weekday = today.weekday
+      }
+      const resp = await buildTodayResponse(sid, dateStr, weekday)
+      return json({ status: 'ok', ...resp })
     }
 
     // ---- 设备端: 宠物主人记忆 ----
@@ -951,7 +1036,12 @@ async function handleApi(request, env, ctx) {
       const b = await readBody(request)
       if (!b.title || !b.event_date) return json({ error: '缺少 title 或 event_date' }, 400)
       const id = uuid()
-      await runAsync('INSERT INTO calendar_events (id, student_id, title, event_date, time_str, description, created_at) VALUES (?,?,?,?,?,?,?)', id, m[1], String(b.title).slice(0,80), String(b.event_date).slice(0,10), b.time_str ? String(b.time_str).slice(0,5) : null, b.description ? String(b.description).slice(0,200) : '', Date.now())
+      const title = String(b.title).slice(0, 80)
+      const eventDate = String(b.event_date).slice(0, 10)
+      await runAsync('INSERT INTO calendar_events (id, student_id, title, event_date, time_str, description, created_at) VALUES (?,?,?,?,?,?,?)', id, m[1], title, eventDate, b.time_str ? String(b.time_str).slice(0,5) : null, b.description ? String(b.description).slice(0,200) : '', Date.now())
+      // 同步到今日清单
+      const checkId = uuid()
+      await runAsync('INSERT INTO checklist_items (id, student_id, content, is_done, target_date, source_id, source_type, created_at) VALUES (?,?,?,0,?,?,?,?)', checkId, m[1], title, eventDate, id, 'calendar_events', Date.now())
       return json({ success: true, id })
     }
     if ((m = path.match(/^\/students\/([^/]+)\/calendar\/([^/]+)$/)) && method === 'DELETE') {
@@ -959,6 +1049,7 @@ async function handleApi(request, env, ctx) {
       const stu = await getAsync('SELECT s.id FROM students s JOIN classes c ON s.class_id=c.id WHERE s.id=? AND c.user_id=?', m[1], uid)
       if (!stu) return json({ error: '无权限' }, 403)
       await runAsync('DELETE FROM calendar_events WHERE id=? AND student_id=?', m[2], m[1])
+      await runAsync('DELETE FROM checklist_items WHERE source_id=? AND source_type=? AND student_id=?', m[2], 'calendar_events', m[1])
       return json({ success: true })
     }
 
@@ -977,7 +1068,8 @@ async function handleApi(request, env, ctx) {
       const b = await readBody(request)
       if (!b.content) return json({ error: '缺少 content' }, 400)
       const id = uuid()
-      await runAsync('INSERT INTO checklist_items (id, student_id, content, is_done, created_at) VALUES (?,?,?,0,?)', id, m[1], String(b.content).slice(0,120), Date.now())
+      const targetDate = b.target_date ? String(b.target_date).slice(0, 10) : shanghaiToday().dateStr
+      await runAsync('INSERT INTO checklist_items (id, student_id, content, is_done, target_date, created_at) VALUES (?,?,?,0,?,?)', id, m[1], String(b.content).slice(0,120), targetDate, Date.now())
       return json({ success: true, id })
     }
     if ((m = path.match(/^\/students\/([^/]+)\/checklist\/([^/]+)$/)) && method === 'PUT') {
@@ -994,6 +1086,25 @@ async function handleApi(request, env, ctx) {
       if (!stu) return json({ error: '无权限' }, 403)
       await runAsync('DELETE FROM checklist_items WHERE id=? AND student_id=?', m[2], m[1])
       return json({ success: true })
+    }
+    if ((m = path.match(/^\/students\/([^/]+)\/today$/)) && method === 'GET') {
+      const uid = await requireUser(request, env)
+      const stu = await getAsync('SELECT s.id FROM students s JOIN classes c ON s.class_id=c.id WHERE s.id=? AND c.user_id=?', m[1], uid)
+      if (!stu) return json({ error: '无权限' }, 403)
+      const url = new URL(request.url)
+      const dateParam = url.searchParams.get('date')
+      const weekdayParam = url.searchParams.get('weekday')
+      let dateStr, weekday
+      if (dateParam) {
+        dateStr = dateParam
+        weekday = Number(weekdayParam ?? (new Date(dateParam).getDay() || 7) % 7)
+      } else {
+        const today = shanghaiToday()
+        dateStr = today.dateStr
+        weekday = today.weekday
+      }
+      const resp = await buildTodayResponse(m[1], dateStr, weekday)
+      return json({ success: true, ...resp })
     }
 
     // ---- 网页端(老师后台): 宠物主人记忆 ----

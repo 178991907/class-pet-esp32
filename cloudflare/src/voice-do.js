@@ -12,6 +12,13 @@ import { matchCorpus } from './intents.js'
 function uuid() {
   return crypto.randomUUID()
 }
+function shanghaiDateFromTs(ts) {
+  const d = new Date(ts + 8 * 60 * 60 * 1000)
+  const y = d.getUTCFullYear()
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0')
+  const day = String(d.getUTCDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
 
 async function publishEvent(env, type, payload) {
   try {
@@ -148,7 +155,9 @@ export async function applyIntent(env, student, nlpResult, now, rawText = '') {
     if (!eventDate) {
       responseData.reply_text = '抱歉，我没听清日期，请再说一遍，比如"周六去春游"。'
     } else {
-      await q.run(db, 'INSERT INTO calendar_events (id, student_id, title, event_date, time_str, description, created_at) VALUES (?,?,?,?,?,?,?)', uuid(), student.id, title, eventDate, timeStr, '', now)
+      const calId = uuid()
+      await q.run(db, 'INSERT INTO calendar_events (id, student_id, title, event_date, time_str, description, created_at) VALUES (?,?,?,?,?,?,?)', calId, student.id, title, eventDate, timeStr, '', now)
+      await q.run(db, 'INSERT INTO checklist_items (id, student_id, content, is_done, target_date, source_id, source_type, created_at) VALUES (?,?,?,0,?,?,?,?)', uuid(), student.id, title, eventDate, calId, 'calendar_events', now)
       responseData.reply_text = nlpResult.reply_text || `好的，已添加到日历：${title}。`
     }
 
@@ -157,7 +166,8 @@ export async function applyIntent(env, student, nlpResult, now, rawText = '') {
     if (!content) {
       responseData.reply_text = '请告诉我待办内容哦。'
     } else {
-      await q.run(db, 'INSERT INTO checklist_items (id, student_id, content, is_done, created_at) VALUES (?,?,?,0,?)', uuid(), student.id, content.slice(0, 120), now)
+      const targetDate = shanghaiDateFromTs(now)
+      await q.run(db, 'INSERT INTO checklist_items (id, student_id, content, is_done, target_date, created_at) VALUES (?,?,?,0,?,?)', uuid(), student.id, content.slice(0, 120), targetDate, now)
       responseData.reply_text = nlpResult.reply_text || `好的，已添加待办：${content}。`
     }
 
@@ -255,6 +265,14 @@ export async function applyIntent(env, student, nlpResult, now, rawText = '') {
       if (updates.length) {
         vals.push(match.id)
         await q.run(db, `UPDATE calendar_events SET ${updates.join(', ')} WHERE id=?`, ...vals)
+        const checkUpdates = []
+        const checkVals = []
+        if (new_title) { checkUpdates.push('content=?'); checkVals.push(new_title.slice(0, 80)) }
+        if (new_date) { checkUpdates.push('target_date=?'); checkVals.push(new_date) }
+        if (checkUpdates.length) {
+          checkVals.push(match.id, 'calendar_events')
+          await q.run(db, `UPDATE checklist_items SET ${checkUpdates.join(', ')} WHERE source_id=? AND source_type=?`, ...checkVals)
+        }
         responseData.reply_text = nlpResult.reply_text || `已为您修改日历安排。`
       } else {
         responseData.reply_text = '请告诉我要修改成什么内容。'
@@ -268,6 +286,7 @@ export async function applyIntent(env, student, nlpResult, now, rawText = '') {
       responseData.reply_text = '没找到对应的日历安排。'
     } else {
       await q.run(db, 'DELETE FROM calendar_events WHERE id=?', match.id)
+      await q.run(db, 'DELETE FROM checklist_items WHERE source_id=? AND source_type=?', match.id, 'calendar_events')
       responseData.reply_text = nlpResult.reply_text || `已删除日历安排：${match.title}。`
     }
 

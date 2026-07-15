@@ -5,7 +5,7 @@ import { useAuth } from '@/composables/useAuth'
 import { useStudentStore } from '@/stores/useStudentStore'
 import { useToast } from '@/composables/useToast'
 import { playChime } from '@/utils/sound'
-import type { CalendarEvent, ChecklistItem, Schedule, OwnerProfile } from '@/types'
+import type { CalendarEvent, Schedule, OwnerProfile } from '@/types'
 
 const route = useRoute()
 const router = useRouter()
@@ -153,13 +153,12 @@ function goToday() {
 }
 
 // ===== 清单：每日待办感 =====
-const checklist = ref<ChecklistItem[]>([])
 const listForm = ref({ content: '' })
 const listAdding = ref(false)
 const showDone = ref(false)
 
-const activeItems = computed(() => checklist.value.filter(i => !i.is_done))
-const doneItems = computed(() => checklist.value.filter(i => i.is_done))
+const activeItems = computed(() => todayItems.value.filter(i => !i.is_done))
+const doneItems = computed(() => todayItems.value.filter(i => i.is_done))
 const todayLabel = computed(() => {
   const d = new Date()
   return `${d.getMonth() + 1}月${d.getDate()}日 ${WEEKDAYS[d.getDay()]}`
@@ -169,6 +168,20 @@ const todayLabel = computed(() => {
 const alarms = ref<Schedule[]>([])
 const alarmForm = ref({ days_of_week: 0b0111110, time_str: '08:00', task_desc: '' })
 const alarmAdding = ref(false)
+
+// ===== 今日聚合（日历+闹铃+清单）=====
+interface TodayItem {
+  type: 'alarm' | 'calendar' | 'checklist'
+  id: string
+  time_str: string | null
+  title: string
+  is_done: boolean
+  source_id: string | null
+  source_type: string
+  checklist_id?: string | null
+}
+const todayItems = ref<TodayItem[]>([])
+const todayInfo = ref({ date: '', weekday: 0 })
 
 // ===== 主人记忆 =====
 const memory = ref<OwnerProfile>({ profile: null, emotion_log: [], learning_log: [] })
@@ -180,14 +193,16 @@ const savingProfile = ref(false)
 async function loadAll() {
   loading.value = true
   try {
-    const [calRes, listRes, alarmRes, memRes] = await Promise.all([
+    const today = new Date()
+    const [calRes, todayRes, alarmRes, memRes] = await Promise.all([
       api.get(`/students/${studentId.value}/calendar`),
-      api.get(`/students/${studentId.value}/checklist`),
+      api.get(`/students/${studentId.value}/today`, { params: { date: toYMD(today), weekday: today.getDay() } }),
       api.get(`/device/schedules/student/${studentId.value}`),
       api.get(`/students/${studentId.value}/owner-profile`)
     ])
     calendar.value = calRes.data.events || calRes.data.calendar || []
-    checklist.value = listRes.data.items || listRes.data.checklist || []
+    todayItems.value = todayRes.data.items || []
+    todayInfo.value = { date: todayRes.data.date, weekday: todayRes.data.weekday }
     alarms.value = (alarmRes.data.schedules || alarmRes.data.items || []).map((a: Schedule) => ({
       ...a,
       days_of_week: a.days_of_week || (a.day_of_week !== undefined ? (1 << a.day_of_week) : 0)
@@ -249,7 +264,10 @@ async function addChecklist() {
   }
   listAdding.value = true
   try {
-    await api.post(`/students/${studentId.value}/checklist`, { ...listForm.value })
+    await api.post(`/students/${studentId.value}/checklist`, {
+      content: listForm.value.content,
+      target_date: toYMD(new Date())
+    })
     playChime('checklist')
     toast.success('已添加到清单')
     listForm.value = { content: '' }
@@ -260,19 +278,23 @@ async function addChecklist() {
     listAdding.value = false
   }
 }
-async function toggleChecklist(item: ChecklistItem) {
+async function toggleChecklist(item: TodayItem) {
+  if (item.type === 'alarm') return
   try {
-    await api.put(`/students/${studentId.value}/checklist/${item.id}`, { is_done: item.is_done ? 0 : 1 })
-    item.is_done = item.is_done ? 0 : 1
-    if (item.is_done) playChime('checklist')
+    const checklistId = (item.type === 'calendar' && item.checklist_id) ? item.checklist_id : item.id
+    const newDone = !item.is_done
+    await api.put(`/students/${studentId.value}/checklist/${checklistId}`, { is_done: newDone ? 1 : 0 })
+    item.is_done = newDone
+    if (newDone) playChime('checklist')
   } catch (e: any) {
     toast.error('更新失败：' + (e?.response?.data?.error || e.message))
   }
 }
-async function delChecklist(id: string) {
+async function delChecklist(item: TodayItem) {
+  if (item.type !== 'checklist') return
   try {
-    await api.delete(`/students/${studentId.value}/checklist/${id}`)
-    checklist.value = checklist.value.filter(e => e.id !== id)
+    await api.delete(`/students/${studentId.value}/checklist/${item.id}`)
+    todayItems.value = todayItems.value.filter(i => i.id !== item.id)
     toast.success('已删除')
   } catch (e: any) {
     toast.error('删除失败：' + (e?.response?.data?.error || e.message))
@@ -404,8 +426,8 @@ onMounted(loadAll)
       <!-- ============ 日历 ============ -->
       <section v-else-if="activeTab === 'calendar'" class="space-y-4">
         <!-- 视图切换 + 导航 -->
-        <div class="bg-white rounded-2xl shadow p-3">
-          <div class="flex items-center justify-between mb-3">
+        <div class="bg-white rounded-2xl shadow p-2">
+          <div class="flex items-center justify-between mb-2">
             <div class="flex gap-1 bg-orange-50 rounded-xl p-1">
               <button @click="setCalView('month')" :class="calView==='month' ? 'bg-orange-500 text-white' : 'text-orange-600'" class="px-3 py-1 rounded-lg text-xs font-bold transition-colors">月</button>
               <button @click="setCalView('week')" :class="calView==='week' ? 'bg-orange-500 text-white' : 'text-orange-600'" class="px-3 py-1 rounded-lg text-xs font-bold transition-colors">周</button>
@@ -422,20 +444,20 @@ onMounted(loadAll)
           <!-- 月视图 -->
           <div v-if="calView==='month'">
             <div class="grid grid-cols-7 gap-1 mb-1">
-              <div v-for="w in WEEKDAYS" :key="w" class="text-center text-xs font-bold text-gray-400 py-1">{{ w.slice(1) }}</div>
+              <div v-for="w in WEEKDAYS" :key="w" class="text-center text-[10px] font-bold text-gray-400 py-1">{{ w.slice(1) }}</div>
             </div>
             <div class="grid grid-cols-7 gap-1">
               <button
                 v-for="c in monthGrid" :key="c.date"
                 @click="selectDate(c.date)"
-                class="aspect-square rounded-xl flex flex-col items-center justify-center text-sm transition-all relative"
+                class="h-10 sm:h-12 rounded-lg flex flex-col items-center justify-center text-xs transition-all relative"
                 :class="[
                   c.inMonth ? 'bg-white' : 'bg-gray-50',
                   c.isSelected ? 'ring-2 ring-orange-500 bg-orange-50' : 'hover:bg-orange-50',
                   !c.inMonth && 'text-gray-300'
                 ]"
               >
-                <span :class="c.isToday ? 'bg-rose-500 text-white w-6 h-6 rounded-full flex items-center justify-center font-bold' : 'font-medium text-gray-700'">{{ c.day }}</span>
+                <span :class="c.isToday ? 'bg-rose-500 text-white w-5 h-5 rounded-full flex items-center justify-center font-bold text-xs' : 'font-medium text-gray-700 text-xs'">{{ c.day }}</span>
                 <span v-if="c.events.length" class="absolute bottom-1 flex gap-0.5">
                   <span v-for="n in Math.min(c.events.length,3)" :key="n" class="w-1 h-1 rounded-full bg-orange-400"></span>
                 </span>
@@ -480,8 +502,8 @@ onMounted(loadAll)
         </div>
 
         <!-- 选中日期的事件 + 快速添加 -->
-        <div class="bg-white rounded-2xl shadow p-4 space-y-3">
-          <div class="font-bold text-gray-700 flex items-center gap-2">📌 {{ selectedLabel }} 的安排</div>
+        <div class="bg-white rounded-2xl shadow p-3 space-y-3">
+          <div class="font-bold text-gray-700 flex items-center gap-2 text-sm">📌 {{ selectedLabel }} 的安排</div>
           <div v-if="dayEvents.length===0" class="text-sm text-gray-300 py-2">还没有安排，下面添加一条吧</div>
           <div v-for="ev in dayEvents" :key="'l'+ev.id" class="flex items-center gap-2 text-sm">
             <span class="text-orange-500 font-bold min-w-[40px]">{{ ev.time_str || '全天' }}</span>
@@ -505,7 +527,7 @@ onMounted(loadAll)
       <section v-else-if="activeTab === 'checklist'" class="space-y-4">
         <div class="bg-white rounded-2xl shadow p-4 flex flex-col gap-1">
           <div class="text-sm font-bold text-gray-700">📋 我的每日清单</div>
-          <div class="text-xs text-gray-400">今天 · {{ todayLabel }} · 共 {{ checklist.length }} 项，已完成 {{ doneItems.length }} 项</div>
+          <div class="text-xs text-gray-400">今天 · {{ todayLabel }} · 共 {{ todayItems.length }} 项，已完成 {{ doneItems.length }} 项</div>
         </div>
 
         <div class="bg-white rounded-2xl shadow p-4 flex gap-2">
@@ -517,9 +539,19 @@ onMounted(loadAll)
         <div v-if="activeItems.length===0" class="text-center text-gray-400 py-8">🎉 今天的待办都清空啦！</div>
         <TransitionGroup name="pop" tag="div" class="space-y-3">
           <div v-for="item in activeItems" :key="item.id" class="bg-white rounded-2xl shadow p-4 flex items-center gap-3">
-            <button @click="toggleChecklist(item)" class="w-6 h-6 rounded-full border-2 border-orange-300 flex items-center justify-center text-transparent hover:bg-orange-50 transition-all">✓</button>
-            <div class="flex-1 text-gray-800">{{ item.content }}</div>
-            <button @click="delChecklist(item.id)" class="text-red-400 hover:text-red-600 text-sm px-2">删除</button>
+            <button v-if="item.type !== 'alarm'" @click="toggleChecklist(item)" class="w-6 h-6 rounded-full border-2 border-orange-300 flex items-center justify-center text-transparent hover:bg-orange-50 transition-all">✓</button>
+            <div v-else class="w-6 h-6 rounded-full bg-orange-100 flex items-center justify-center text-orange-500 text-xs">⏰</div>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2">
+                <span v-if="item.time_str" class="text-xs font-bold text-orange-500">{{ item.time_str }}</span>
+                <span class="text-gray-800">{{ item.title }}</span>
+              </div>
+              <div class="text-xs text-gray-400 mt-0.5">
+                <span v-if="item.type === 'calendar'">📅 来自日历</span>
+                <span v-else-if="item.type === 'alarm'">⏰ 定时提醒</span>
+              </div>
+            </div>
+            <button v-if="item.type === 'checklist'" @click="delChecklist(item)" class="text-red-400 hover:text-red-600 text-sm px-2">删除</button>
           </div>
         </TransitionGroup>
 
@@ -531,9 +563,15 @@ onMounted(loadAll)
           </button>
           <TransitionGroup v-if="showDone" name="pop" tag="div" class="space-y-2">
             <div v-for="item in doneItems" :key="item.id" class="bg-gray-50 rounded-2xl p-4 flex items-center gap-3 opacity-70">
-              <button @click="toggleChecklist(item)" class="w-6 h-6 rounded-full border-2 bg-green-500 border-green-500 flex items-center justify-center text-white transition-all">✓</button>
-              <div class="flex-1 line-through text-gray-400">{{ item.content }}</div>
-              <button @click="delChecklist(item.id)" class="text-red-400 hover:text-red-600 text-sm px-2">删除</button>
+              <button v-if="item.type !== 'alarm'" @click="toggleChecklist(item)" class="w-6 h-6 rounded-full border-2 bg-green-500 border-green-500 flex items-center justify-center text-white transition-all">✓</button>
+              <div v-else class="w-6 h-6 rounded-full bg-orange-100 flex items-center justify-center text-orange-500 text-xs">⏰</div>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2">
+                  <span v-if="item.time_str" class="text-xs font-bold text-orange-500">{{ item.time_str }}</span>
+                  <span class="line-through text-gray-400">{{ item.title }}</span>
+                </div>
+              </div>
+              <button v-if="item.type === 'checklist'" @click="delChecklist(item)" class="text-red-400 hover:text-red-600 text-sm px-2">删除</button>
             </div>
           </TransitionGroup>
         </div>
