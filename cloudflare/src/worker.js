@@ -645,7 +645,7 @@ async function handleApi(request, env, ctx) {
       const daysMask = Number(b.days_of_week ?? 0)
       if (!daysMask || !b.time_str || !b.task_desc) return json({ error: '参数缺失' }, 400)
       const id = uuid()
-      await runAsync('INSERT INTO schedules (id, student_id, day_of_week, days_of_week, time_str, task_desc, is_active, created_at) VALUES (?,?,?,?,?,1,?)', id, m[1], firstDayOfMask(daysMask), daysMask, b.time_str, b.task_desc, Date.now())
+      await runAsync('INSERT INTO schedules (id, student_id, day_of_week, days_of_week, time_str, task_desc, is_active, created_at) VALUES (?,?,?,?,?,?,1,?)', id, m[1], firstDayOfMask(daysMask), daysMask, b.time_str, b.task_desc, Date.now())
       return json({ success: true, id })
     }
     if ((m = path.match(/^\/device\/schedules\/([^/]+)$/)) && method === 'DELETE') {
