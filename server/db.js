@@ -31,6 +31,8 @@ async function initClient() {
     const Database = sqliteModule.default
     const dbPath = join(__dirname, 'pet-garden.db')
     db = new Database(dbPath)
+    db.pragma('journal_mode = WAL')
+    db.pragma('synchronous = NORMAL')
     console.log("💾 [ClassPetGarden] 已使用本地 SQLite 数据库驱动")
   }
 }

@@ -42,6 +42,8 @@ api.interceptors.request.use((config) => {
   return config
 })
 
+import { toast } from '@/composables/useToast'
+
 // 响应拦截器：处理 401 错误自动退回游客模式
 api.interceptors.response.use(
   (response) => {
@@ -53,6 +55,14 @@ api.interceptors.response.use(
       status: error.response?.status,
       data: error.response?.data
     })
+    
+    // 全局错误提示 (修复无反馈 Bug)
+    if (error.response?.data?.error) {
+      toast.error(error.response.data.error)
+    } else if (error.message === 'Network Error') {
+      toast.error('网络连接失败，请检查网络或服务端状态')
+    }
+
     if (error.response?.status === 401 && !isGuest.value) {
       console.warn('⚠️ [useAuth] 检测到 401 响应且当前非游客状态，强制执行 logout() 退回游客模式！')
       logout()

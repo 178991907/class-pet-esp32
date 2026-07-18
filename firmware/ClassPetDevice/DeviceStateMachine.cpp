@@ -196,7 +196,9 @@ void DeviceStateMachine::handleEvent(DeviceEvent ev) {
     case EVENT_POMODORO_START:
       if (_state == STATE_NORMAL_ONLINE || _state == STATE_NORMAL_OFFLINE || _state == STATE_POMODORO_SETTINGS) {
         DEBUG_PRINTLN("🍅 [状态机] 收到事件: 启动番茄工作钟");
+        LVGL_LOCK();
         uint32_t mins = _voiceTomatoMinutes > 0 ? (uint32_t)_voiceTomatoMinutes : ClassPetUI::getInstance().getSelectedTomatoTime();
+        LVGL_UNLOCK();
         _voiceTomatoMinutes = 0;
         tomatoTimer.start(mins);
         _state = STATE_POMODORO;

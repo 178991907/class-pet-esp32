@@ -118,7 +118,7 @@ INSERT OR IGNORE INTO evaluation_rules (id, name, points, category, is_custom, c
 INSERT OR IGNORE INTO settings (key, value) VALUES
   ('task_confirm_mode', '"auto"'),
   ('task_confirm_delay', '30'),
-  ('firmware_latest_version', '"2.0.0"'),
+  ('firmware_latest_version', '"2.2.0"'),
   ('firmware_download_url', '"/firmware/latest.bin"'),
   ('firmware_checksum', '"dummy_checksum_sha256"'),
   ('teacher_invite_code', '"TEACHER_INVITE"'),

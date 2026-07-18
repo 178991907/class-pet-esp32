@@ -24,8 +24,8 @@ void LcdDisplay::init() {
   
   // 2. 初始化 TFT_eSPI 并配置方向
   _tft.init();
-  _tft.setRotation(1); // 横屏 320x240 模式
-  _tft.invertDisplay(true); // 修复颜色反转问题 (修复了橙色变蓝，绿色变粉的问题)
+  _tft.setRotation(1); // 恢复横屏 320x240 模式
+  _tft.invertDisplay(true); // 修复颜色反转问题
   _tft.fontLoaded = false; // 修正 fontLoaded 未初始化崩溃bug
   
   // 3. 初始化 CST820 I2C 电容触摸屏
@@ -39,9 +39,9 @@ void LcdDisplay::init() {
   _lvgl_mutex = xSemaphoreCreateMutex();
   
   // 5. 创建 LVGL 9.5.0 独立显示对象
-  _disp = lv_display_create(320, 240);
+  _disp = lv_display_create(320, 240); // 恢复横向分辨率
   
-  // 申请双缓冲区，大小为 320x24 像素 (16-bit RGB565) = 15360 字节
+  // 申请双缓冲区
   const uint32_t buf_size = 320 * 24 * sizeof(uint16_t);
   _buf1 = (uint8_t*)malloc(buf_size);
   _buf2 = (uint8_t*)malloc(buf_size);

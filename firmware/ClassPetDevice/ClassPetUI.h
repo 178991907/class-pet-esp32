@@ -33,11 +33,20 @@ public:
 
   // 新增功能屏
   void showSettings();
+  void showStandbyClock();
+
+  void showMenu();
   void showCalendar();
   void showList();
   void showAlarm();
-  void showOwnerMemory();
-  void showStandbyClock();
+  void showOwner();
+  
+  void initMenuScreen();
+  void initCalendarScreen();
+  void initListScreen();
+  void initAlarmScreen();
+  void initOwnerScreen();
+
   // 请求后台同步某功能数据 (type: 1=日历 2=清单 3=闹铃 4=主人记忆)
   void markFeatureSync(uint8_t type);
   // 后台(主循环)取回数据后调用，刷新对应列表
@@ -63,8 +72,9 @@ public:
   private:
   ClassPetUI() : 
     _scr_normal(nullptr), _scr_diag(nullptr), _scr_tomato(nullptr), _scr_processing(nullptr),
-    _scr_menu(nullptr), _scr_standby(nullptr),
-    _scr_settings(nullptr), _scr_calendar(nullptr), _scr_list(nullptr), _scr_alarm(nullptr), _scr_owner(nullptr),
+    _scr_standby(nullptr),
+    _scr_settings(nullptr), _scr_menu(nullptr),
+    _scr_calendar(nullptr), _scr_list(nullptr), _scr_alarm(nullptr), _scr_owner(nullptr),
     _card_normal(nullptr),
     _lbl_normal_wifi(nullptr), _lbl_normal_battery(nullptr), _bar_battery(nullptr), _lbl_normal_name(nullptr), _lbl_normal_lv(nullptr), 
     _bar_normal_exp(nullptr), _lbl_normal_exp(nullptr),
@@ -80,13 +90,25 @@ public:
     _list_calendar(nullptr), _list_checklist(nullptr), _list_alarm(nullptr), _list_owner(nullptr) {}
   
   // 屏幕对象
+  
+  // 现代 Web 风格的集成式选项卡屏幕
+  lv_obj_t* _scr_tabview = nullptr;
+  lv_obj_t* _tabview = nullptr;
+  lv_obj_t* _tab_calendar = nullptr;
+  lv_obj_t* _tab_list = nullptr;
+  lv_obj_t* _tab_alarm = nullptr;
+  lv_obj_t* _tab_owner = nullptr;
+
+  lv_obj_t* _btn_voice_float = nullptr;
+  lv_obj_t* _btn_tomato_float = nullptr;
+
   lv_obj_t* _scr_normal;
   lv_obj_t* _scr_diag;
   lv_obj_t* _scr_tomato;
   lv_obj_t* _scr_processing;
-  lv_obj_t* _scr_menu;
   lv_obj_t* _scr_standby;
   lv_obj_t* _scr_settings;
+  lv_obj_t* _scr_menu;
   lv_obj_t* _scr_calendar;
   lv_obj_t* _scr_list;
   lv_obj_t* _scr_alarm;
@@ -148,6 +170,17 @@ public:
   lv_obj_t* _list_checklist;
   lv_obj_t* _list_alarm;
   lv_obj_t* _list_owner;
+  
+  // Tab 按钮引用，方便切换样式
+  lv_obj_t* _tab_btn_calendar;
+  lv_obj_t* _tab_btn_checklist;
+  lv_obj_t* _tab_btn_alarm;
+  lv_obj_t* _tab_btn_owner;
+  lv_obj_t* _tab_lbl_calendar;
+  lv_obj_t* _tab_lbl_checklist;
+  lv_obj_t* _tab_lbl_alarm;
+  lv_obj_t* _tab_lbl_owner;
+  int _current_tab_index = 0; // 0=日历, 1=清单, 2=闹铃, 3=画像
   // 清单项 id / 完成态缓存(供点击切换)
   std::vector<String> _check_ids;
   std::vector<bool> _check_done;
@@ -172,20 +205,24 @@ public:
   lv_obj_t* _voice_you = nullptr;
   lv_obj_t* _voice_pet = nullptr;
   
+  
+  void initTabView();
   void initNormalScreen();
+
   void initDiagScreen();
   void initTomatoScreen();
   void initProcessingScreen();
-  void initMenuScreen();
   void initStandbyScreen();
   void initSettingsScreen();
-  void initCalendarScreen();
-  void initListScreen();
-  void initAlarmScreen();
-  void initOwnerScreen();
+  
+  void initFeaturesScreen();
+  void switchFeatureTab(int idx);
 
-  // 通用列表行构造: 在 scroll 容器内添加一行(标题+副标题), 返回该行对象
+  // 针对不同设计的卡片渲染函数
   lv_obj_t* addListRow(lv_obj_t* scroll, const String& title, const String& sub, bool dim = false);
+  lv_obj_t* addTodoRow(lv_obj_t* scroll, const String& title, bool isDone);
+  lv_obj_t* addAlarmRow(lv_obj_t* scroll, const String& timeStr, const String& title);
+  
   void clearList(lv_obj_t* scroll);
   
   // 内部辅助
@@ -195,6 +232,7 @@ public:
   
   // 统一界面跳转
   void loadScreen(lv_obj_t* scr);
+
 };
 
 #endif // CLASSPET_UI_H

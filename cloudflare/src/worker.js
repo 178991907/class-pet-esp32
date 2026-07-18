@@ -607,7 +607,7 @@ async function handleApi(request, env, ctx) {
       return new Response(tts.mp3, { headers: { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'public, max-age=3600', 'Access-Control-Allow-Origin': '*' } })
     }
     if (path === '/device/firmware-version' && method === 'GET') {
-      const v = await getSetting('firmware_latest_version', '2.0.0')
+      const v = await getSetting('firmware_latest_version', '2.2.0')
       const dl = await getSetting('firmware_download_url', '/firmware/latest.bin')
       const cs = await getSetting('firmware_checksum', 'dummy')
       return json({ latest_version: v, download_url: dl, checksum: cs })

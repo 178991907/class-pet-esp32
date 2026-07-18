@@ -15,7 +15,7 @@ const studentId = computed(() => route.params.id as string)
 const student = computed(() => studentStore.students.find(s => s.id === studentId.value))
 
 // 设备固件当前编译版本（与固件 DeviceSettings.FIRMWARE_VERSION 一致）
-const CURRENT_FIRMWARE = '2.1.0'
+const CURRENT_FIRMWARE = '2.2.0'
 
 const loading = ref(false)
 const latestFirmware = ref('')
