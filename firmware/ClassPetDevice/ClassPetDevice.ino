@@ -253,7 +253,7 @@ void processFeatureSync() {
   if (ok) {
     ClassPetUI::getInstance().renderFeatureData(type, out);
   } else {
-    ClassPetUI::getInstance().showToast("同步失败，请检查网络", 2000);
+    DEBUG_PRINTLN("⚠️ [Sync] 后台同步失败或接口尚未准备好");
   }
   LcdDisplay::getInstance().unlock();
 }

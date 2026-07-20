@@ -62,9 +62,9 @@ public:
   void setVoiceOverlayTitle(const String& title);
   void setVoiceOverlayLevel(int db);
   void setVoiceOverlayCaption(bool isUser, const String& text);
-  void setVoiceOverlayCountdown(int seconds);      // 更新录音倒计时
   void setVoiceOverlayProcessing(bool processing); // 切换到"识别中" spinner
   void exitVoiceOverlay();
+  bool isVoiceOverlayVisible() const { return _voice_overlay != nullptr; }
 
   // 设置并在主页播放宠物动图
   void setPetGif(const void* data, size_t size);
@@ -198,7 +198,6 @@ public:
   // P0: 语音覆盖层控件 (child of 当前屏, 透明背景, 宠物在底层保持可见)
   lv_obj_t* _voice_overlay = nullptr;
   lv_obj_t* _voice_title = nullptr;
-  lv_obj_t* _voice_countdown = nullptr;
   lv_obj_t* _voice_level = nullptr;
   lv_obj_t* _voice_stop_btn = nullptr;
   lv_obj_t* _voice_processing_spinner = nullptr;

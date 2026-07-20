@@ -209,11 +209,8 @@ void DeviceStateMachine::handleEvent(DeviceEvent ev) {
       if (_state == STATE_POMODORO || _state == STATE_POMODORO_SETTINGS) {
         DEBUG_PRINTLN("🍅 [状态机] 收到事件: 退出番茄钟");
         tomatoTimer.stop();
-        _state = STATE_NORMAL_ONLINE; // 强行退出回在线态 (如果有网的话，依靠 loop 自行纠正离线)
-        _last_sync_time = millis(); // 退出时重置同步时间，避免立刻被网络同步阻塞导致 UI 卡顿
-        LVGL_LOCK();
-        ClassPetUI::getInstance().forceSwitchToNormal();
-        LVGL_UNLOCK();
+        _state = STATE_NORMAL_ONLINE; 
+        _last_sync_time = millis(); 
       }
       break;
       
@@ -244,6 +241,23 @@ void DeviceStateMachine::handleEvent(DeviceEvent ev) {
       }
       break;
       
+    case EVENT_VOICE_ENTER:
+      if (_state == STATE_NORMAL_ONLINE || _state == STATE_NORMAL_OFFLINE) {
+        if (millis() - _voiceDoneTime < 3000) {
+          DEBUG_PRINTLN("🎙️ [状态机] 录音冷却期内, 忽略进入语音层请求");
+          break;
+        }
+        if (serial_diag_active) {
+          DEBUG_PRINTLN("⚠️ [状态机] 串口诊断模式正在使用音频硬件，跳过语音请求");
+          break;
+        }
+        DEBUG_PRINTLN("🎙️ [状态机] 收到事件: 准备语音对话");
+        LVGL_LOCK();
+        ClassPetUI::getInstance().enterVoiceOverlay("准备就绪，请按住屏幕按钮说话");
+        LVGL_UNLOCK();
+      }
+      break;
+
     case EVENT_VOICE_START:
       if (_state == STATE_NORMAL_ONLINE || _state == STATE_NORMAL_OFFLINE) {
         // 3 秒录音冷却期, 防止上一次语音流程结束后立即重复进入
@@ -257,6 +271,13 @@ void DeviceStateMachine::handleEvent(DeviceEvent ev) {
           break;
         }
         DEBUG_PRINTLN("🎙️ [状态机] 收到事件: 启动语音模拟对话");
+        LVGL_LOCK();
+        if (!ClassPetUI::getInstance().isVoiceOverlayVisible()) {
+            ClassPetUI::getInstance().enterVoiceOverlay("录音中... 松开结束");
+        } else {
+            ClassPetUI::getInstance().setVoiceOverlayTitle("录音中... 松开结束");
+        }
+        LVGL_UNLOCK();
         _state = STATE_RECORDING;
       } else {
         DEBUG_PRINTLN("🎙️ [状态机] 非待机状态, 忽略语音启动请求");
@@ -620,28 +641,17 @@ void DeviceStateMachine::loopState() {
           Serial.println("⚠️ [WS] 连接失败, 本次退回原 HTTP 流程");
         }
 
-        // P0: 进入语音覆盖层 (宠物常驻 + 实时字幕), 不再切到转圈页
-        LVGL_LOCK();
-        ClassPetUI::getInstance().enterVoiceOverlay("我在听... 说完松手");
-        ClassPetUI::getInstance().setVoiceOverlayCountdown(8);
-        LVGL_UNLOCK();
+        // P0: 进入语音覆盖层逻辑已移至 EVENT_VOICE_START，此处只需确认安全
       }
 
       uint32_t recordStart = millis();
       bool is_btn_start = (digitalRead(PHYSICAL_KEY_PIN) == LOW);
 
-      // 根据触发方式给出不同的操作提示, 并在标题更新倒计时
-      LVGL_LOCK();
-      ClassPetUI::getInstance().setVoiceOverlayTitle(is_btn_start ? "我在听… 松开按键结束" : "我在听… 点击结束录音");
-      ClassPetUI::getInstance().setVoiceOverlayCountdown(is_btn_start ? 15 : 8);
-      LVGL_UNLOCK();
-
-      // 录音上限: 实体键最长 15s, 触屏按钮最长 8s (给儿童用, 句子短)
-      uint32_t timeout = is_btn_start ? 15000 : 8000;
+      // 极限安全保护，防止异常卡死 (60s)
+      uint32_t timeout = 60000;
       uint32_t lastSpeechMs = recordStart;
       uint32_t speechAccumMs = 0;
       bool vadStop = false;
-      uint32_t lastCountdownUpdate = 0;
 
       while (millis() - recordStart < timeout) {
         // 状态机任务自己驱动 I2S 读取，避免 loop() 被阻塞时录音数据丢失
@@ -652,15 +662,6 @@ void DeviceStateMachine::loopState() {
         LVGL_LOCK();
         ClassPetUI::getInstance().setVoiceOverlayLevel(lvl);
         LVGL_UNLOCK();
-
-        // 每 500ms 刷新一次倒计时, 让孩子/老师知道还能说多久
-        if (millis() - lastCountdownUpdate >= 500) {
-          int remaining = (int)((timeout - (millis() - recordStart) + 999) / 1000);
-          LVGL_LOCK();
-          ClassPetUI::getInstance().setVoiceOverlayCountdown(remaining);
-          LVGL_UNLOCK();
-          lastCountdownUpdate = millis();
-        }
 
         // P1: 轻量 VAD —— 有语音则累计, 静音持续超阈值且已说满最短时长 -> 自动断句
         if (lvl > 10) {
